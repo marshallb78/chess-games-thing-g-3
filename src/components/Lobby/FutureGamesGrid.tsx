@@ -276,3 +276,4 @@ export const FutureGamesGrid: React.FC<FutureGamesGridProps> = ({ onSelectGame }
     </div>
   );
 };
+

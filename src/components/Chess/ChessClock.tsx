@@ -108,3 +108,4 @@ export const ChessClock: React.FC<ChessClockProps> = ({
     </div>
   );
 };
+

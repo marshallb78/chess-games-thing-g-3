@@ -16,3 +16,4 @@ const firebaseConfig = {
 export const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth: Auth = getAuth(app);
 export const rtdb: Database = getDatabase(app);
+

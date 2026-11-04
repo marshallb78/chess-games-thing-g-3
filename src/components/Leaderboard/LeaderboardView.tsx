@@ -223,3 +223,4 @@ export const LeaderboardView: React.FC = () => {
     </div>
   );
 };
+

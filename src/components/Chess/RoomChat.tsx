@@ -187,3 +187,4 @@ export const RoomChat: React.FC<RoomChatProps> = ({
     </div>
   );
 };
+

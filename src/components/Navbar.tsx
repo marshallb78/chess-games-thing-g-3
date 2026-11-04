@@ -1,36 +1,39 @@
 import React from 'react';
-import { Gamepad2, LogIn, LogOut, Award } from 'lucide-react';
+import { Gamepad2, LogIn, LogOut, Users } from 'lucide-react';
 
 interface NavbarProps {
   currentUser: {
     uid: string;
     displayName: string | null;
-    email: string | null;
+    email?: string | null;
+    isGuest?: boolean;
   } | null;
   onOpenAuth: () => void;
   onOpenProfile: () => void;
+  onOpenFriends: () => void;
   onSignOut: () => void;
-  currentView: 'lobby' | 'chess' | 'leaderboard';
-  onChangeView: (view: 'lobby' | 'chess' | 'leaderboard') => void;
+  onGoHome: () => void;
+  friendRequestsCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   onOpenAuth,
   onOpenProfile,
+  onOpenFriends,
   onSignOut,
-  currentView,
-  onChangeView
+  onGoHome,
+  friendRequestsCount = 0
 }) => {
   return (
     <header
       style={{
-        background: 'var(--bg-primary)',
+        background: 'rgba(11, 17, 32, 0.85)',
         borderBottom: '1px solid var(--border-subtle)',
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        backdropFilter: 'blur(10px)'
+        backdropFilter: 'blur(12px)'
       }}
     >
       <div
@@ -39,23 +42,24 @@ export const Navbar: React.FC<NavbarProps> = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0.75rem 1.5rem'
+          padding: '0.65rem 1.25rem'
         }}
       >
-        {/* Brand Logo */}
+        {/* Brand Logo & Name */}
         <div
-          onClick={() => onChangeView('lobby')}
+          onClick={onGoHome}
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.6rem',
-            cursor: 'pointer'
+            gap: '0.55rem',
+            cursor: 'pointer',
+            userSelect: 'none'
           }}
         >
           <div
             style={{
-              width: '38px',
-              height: '38px',
+              width: '34px',
+              height: '34px',
               borderRadius: '10px',
               background: 'linear-gradient(135deg, #0ea5e9 0%, #8b5cf6 100%)',
               display: 'flex',
@@ -64,13 +68,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               boxShadow: '0 0 16px rgba(56, 189, 248, 0.4)'
             }}
           >
-            <Gamepad2 size={22} color="#ffffff" />
+            <Gamepad2 size={20} color="#ffffff" />
           </div>
           <div>
             <span
               style={{
-                fontSize: '1.2rem',
-                fontWeight: 800,
+                fontSize: '1.25rem',
+                fontWeight: 900,
                 letterSpacing: '-0.5px',
                 background: 'linear-gradient(to right, #38bdf8, #c084fc)',
                 WebkitBackgroundClip: 'text',
@@ -81,109 +85,119 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
             <span
               style={{
-                fontSize: '1.2rem',
-                fontWeight: 700,
+                fontSize: '1.25rem',
+                fontWeight: 800,
                 letterSpacing: '-0.5px',
                 color: 'var(--text-primary)',
-                marginLeft: '4px'
+                marginLeft: '5px'
               }}
             >
-              GAMES
+              CHESS
             </span>
           </div>
         </div>
 
-        {/* Center navigation links */}
-        <nav style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <button
-            onClick={() => onChangeView('lobby')}
-            className="btn-secondary"
-            style={{
-              padding: '0.45rem 0.9rem',
-              fontSize: '0.85rem',
-              background: currentView === 'lobby' ? 'var(--bg-card)' : 'transparent',
-              borderColor: currentView === 'lobby' ? 'var(--accent-cyan)' : 'transparent'
-            }}
-          >
-            Lobby
-          </button>
-          <button
-            onClick={() => onChangeView('chess')}
-            className="btn-secondary"
-            style={{
-              padding: '0.45rem 0.9rem',
-              fontSize: '0.85rem',
-              background: currentView === 'chess' ? 'var(--bg-card)' : 'transparent',
-              borderColor: currentView === 'chess' ? 'var(--accent-cyan)' : 'transparent'
-            }}
-          >
-            Chess
-          </button>
-          <button
-            onClick={() => onChangeView('leaderboard')}
-            className="btn-secondary"
-            style={{
-              padding: '0.45rem 0.9rem',
-              fontSize: '0.85rem',
-              background: currentView === 'leaderboard' ? 'var(--bg-card)' : 'transparent',
-              borderColor: currentView === 'leaderboard' ? 'var(--accent-cyan)' : 'transparent'
-            }}
-          >
-            <Award size={15} /> Leaderboard
-          </button>
-        </nav>
-
-        {/* Right Auth / Profile Pill */}
+        {/* Right Navigation / User Status */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           {currentUser ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {/* Friends button */}
+              <button
+                onClick={onOpenFriends}
+                className="btn-secondary"
+                style={{
+                  padding: '0.4rem 0.75rem',
+                  fontSize: '0.82rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  position: 'relative'
+                }}
+                title="Friends list and requests"
+              >
+                <Users size={15} color="var(--accent-cyan)" />
+                <span className="hidden sm:inline">Friends</span>
+                {friendRequestsCount > 0 && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '-4px',
+                      right: '-4px',
+                      width: '18px',
+                      height: '18px',
+                      borderRadius: '50%',
+                      background: 'var(--accent-red)',
+                      color: 'white',
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {friendRequestsCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Profile Pill */}
               <button
                 onClick={onOpenProfile}
                 className="btn-secondary"
                 style={{
-                  padding: '0.45rem 0.8rem',
-                  fontSize: '0.85rem',
+                  padding: '0.4rem 0.8rem',
+                  fontSize: '0.82rem',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.5rem'
+                  gap: '6px'
                 }}
               >
                 <div
                   style={{
-                    width: '24px',
-                    height: '24px',
+                    width: '22px',
+                    height: '22px',
                     borderRadius: '50%',
-                    background: 'var(--accent-cyan)',
-                    color: '#070a12',
+                    background: currentUser.isGuest
+                      ? 'linear-gradient(135deg, #64748b, #475569)'
+                      : 'linear-gradient(135deg, #0ea5e9, #8b5cf6)',
+                    color: '#ffffff',
                     fontWeight: 700,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '0.75rem'
+                    fontSize: '0.72rem'
                   }}
                 >
                   {(currentUser.displayName || 'P')[0].toUpperCase()}
                 </div>
                 <span>{currentUser.displayName || 'Player'}</span>
+                {currentUser.isGuest && (
+                  <span style={{ fontSize: '0.68rem', color: 'var(--accent-amber)', background: 'rgba(245, 158, 11, 0.12)', padding: '1px 5px', borderRadius: '4px' }}>
+                    Guest
+                  </span>
+                )}
               </button>
 
+              {/* Sign Out */}
               <button
                 onClick={onSignOut}
                 className="btn-secondary"
-                style={{ padding: '0.45rem 0.6rem' }}
+                style={{ padding: '0.4rem 0.55rem' }}
                 title="Sign Out"
               >
-                <LogOut size={16} />
+                <LogOut size={15} />
               </button>
             </div>
           ) : (
-            <button
-              onClick={onOpenAuth}
-              className="btn-primary"
-              style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
-            >
-              <LogIn size={16} /> Sign In
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                onClick={onOpenAuth}
+                className="btn-primary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
+              >
+                <LogIn size={15} /> Sign In
+              </button>
+            </div>
           )}
         </div>
       </div>

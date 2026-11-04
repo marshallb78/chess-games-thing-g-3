@@ -16,19 +16,65 @@ interface AuthContextType {
   currentUser: FirebaseUser | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  isGuest: boolean;
   signIn: (email: string, pass: string) => Promise<void>;
   createAccount: (displayName: string, email: string, pass: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  playAsGuest: () => UserProfile;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function getOrCreateGuestProfile(): UserProfile {
+  if (typeof window !== 'undefined') {
+    const stored = sessionStorage.getItem('g3_guest_profile');
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch {
+        // invalid JSON
+      }
+    }
+  }
+
+  const guestCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const guestProfile: UserProfile = {
+    uid: 'guest_' + Math.random().toString(36).substring(2, 10),
+    displayName: 'Guest ' + guestCode,
+    publicId: 'G' + guestCode,
+    avatar: 'default',
+    createdAt: Date.now(),
+    lastActive: Date.now(),
+    isGuest: true,
+    about: 'Casual Guest Player on G+3',
+    stats: {
+      gamesPlayed: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0
+    },
+    ratings: {
+      bullet: { rating: 1200, provisional: true, gamesPlayed: 0 },
+      blitz: { rating: 1200, provisional: true, gamesPlayed: 0 },
+      rapid: { rating: 1200, provisional: true, gamesPlayed: 0 },
+      casual: { rating: 1200, provisional: true, gamesPlayed: 0 }
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem('g3_guest_profile', JSON.stringify(guestProfile));
+  }
+
+  return guestProfile;
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
 
   // Fetch or safely initialize profile for user
   const fetchOrCreateProfile = async (user: FirebaseUser, chosenDisplayName?: string): Promise<UserProfile> => {
@@ -53,6 +99,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       avatar: 'default',
       createdAt: Date.now(),
       lastActive: Date.now(),
+      isGuest: false,
+      about: 'Chess player on G+3.',
       stats: {
         gamesPlayed: 0,
         wins: 0,
@@ -71,16 +119,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newProfile;
   };
 
+  const playAsGuest = (): UserProfile => {
+    const guest = getOrCreateGuestProfile();
+    setUserProfile(guest);
+    setIsGuest(true);
+    return guest;
+  };
+
   const refreshProfile = async () => {
-    if (!currentUser) {
-      setUserProfile(null);
-      return;
-    }
-    try {
-      const profile = await fetchOrCreateProfile(currentUser);
-      setUserProfile(profile);
-    } catch (err) {
-      console.warn('Could not refresh profile from RTDB:', err);
+    if (currentUser) {
+      try {
+        const profile = await fetchOrCreateProfile(currentUser);
+        setUserProfile(profile);
+      } catch (err) {
+        console.warn('Could not refresh profile from RTDB:', err);
+      }
     }
   };
 
@@ -88,12 +141,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
+        setIsGuest(false);
         try {
           const profile = await fetchOrCreateProfile(user);
           setUserProfile(profile);
         } catch (err) {
-          console.warn('Profile fetch error:', err);
-          // Fallback minimal profile in memory if DB connection is empty
+          console.warn('Profile fetch fallback:', err);
           setUserProfile({
             uid: user.uid,
             displayName: user.displayName || user.email?.split('@')[0] || 'Player',
@@ -101,6 +154,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             avatar: 'default',
             createdAt: Date.now(),
             lastActive: Date.now(),
+            isGuest: false,
+            about: 'Chess player on G+3.',
             stats: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0 },
             ratings: {
               bullet: { rating: 1200, provisional: true, gamesPlayed: 0 },
@@ -111,7 +166,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
         }
       } else {
-        setUserProfile(null);
+        // If not signed in, initialize a guest profile in memory so the user can play without block
+        const guest = getOrCreateGuestProfile();
+        setUserProfile(guest);
+        setIsGuest(true);
       }
       setLoading(false);
     });
@@ -123,6 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const credential = await signInWithEmailAndPassword(auth, email.trim(), pass);
     const profile = await fetchOrCreateProfile(credential.user);
     setUserProfile(profile);
+    setIsGuest(false);
   };
 
   const createAccount = async (displayName: string, email: string, pass: string) => {
@@ -131,6 +190,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await updateProfile(credential.user, { displayName: cleanName });
     const profile = await fetchOrCreateProfile(credential.user, cleanName);
     setUserProfile(profile);
+    setIsGuest(false);
   };
 
   const resetPassword = async (email: string) => {
@@ -139,7 +199,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     await fbSignOut(auth);
-    setUserProfile(null);
+    const guest = getOrCreateGuestProfile();
+    setUserProfile(guest);
+    setIsGuest(true);
     setCurrentUser(null);
   };
 
@@ -149,11 +211,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         userProfile,
         loading,
+        isGuest,
         signIn,
         createAccount,
         resetPassword,
         signOut,
-        refreshProfile
+        refreshProfile,
+        playAsGuest
       }}
     >
       {children}

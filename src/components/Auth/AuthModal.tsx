@@ -6,12 +6,14 @@ interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialMode?: 'signin' | 'signup';
+  onPlayAsGuest?: () => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
-  initialMode = 'signin'
+  initialMode = 'signin',
+  onPlayAsGuest
 }) => {
   const { signIn, createAccount, resetPassword } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>(initialMode);
@@ -397,8 +399,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </p>
           )}
+
+          {onPlayAsGuest && (
+            <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  handleClose();
+                  onPlayAsGuest();
+                }}
+                className="btn-secondary"
+                style={{ width: '100%', padding: '0.65rem', fontSize: '0.88rem' }}
+              >
+                Play as Guest (Skip for now)
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
+

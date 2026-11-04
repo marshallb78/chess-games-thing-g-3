@@ -193,15 +193,34 @@ input:focus, select:focus, textarea:focus {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Notation and Chessboard Container */
 .chess-board-wrapper {
   position: relative;
   width: 100%;
-  max-width: 580px;
+  max-width: 660px;
   aspect-ratio: 1 / 1;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-subtle);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 0 1px var(--border-subtle);
   background: #111827;
 }
 
@@ -209,12 +228,12 @@ input:focus, select:focus, textarea:focus {
 .chess-layout {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 1.5rem;
+  gap: 1.25rem;
   align-items: start;
 }
 
 @media (min-width: 960px) {
   .chess-layout {
-    grid-template-columns: minmax(360px, 580px) 1fr;
+    grid-template-columns: minmax(360px, 660px) 1fr;
   }
 }

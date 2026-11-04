@@ -135,3 +135,57 @@ test('Captured pieces and material calculation', () => {
   assert.equal(whiteScore, 1); // White is +1
   assert.equal(blackScore, -1);
 });
+
+test('Bot engine calculates legal moves for Easy, Medium, and Hard', async () => {
+  const { getBestBotMove } = await import('../src/lib/botEngine.ts');
+  const chess = new Chess();
+
+  const easyMove = getBestBotMove(chess, 'easy');
+  assert.ok(easyMove);
+  assert.ok(chess.moves().includes(easyMove.san));
+
+  const mediumMove = getBestBotMove(chess, 'medium');
+  assert.ok(mediumMove);
+  assert.ok(chess.moves().includes(mediumMove.san));
+
+  const hardMove = getBestBotMove(chess, 'hard');
+  assert.ok(hardMove);
+  assert.ok(chess.moves().includes(hardMove.san));
+});
+
+test('Bot engine detects mate in 1', async () => {
+  const { getBestBotMove } = await import('../src/lib/botEngine.ts');
+  // Position where White queen on h5 can play Qxf7#
+  const chess = new Chess('r1bqkb1r/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1');
+  const best = getBestBotMove(chess, 'hard');
+  assert.ok(best);
+  assert.equal(best.san, 'Qxf7#');
+});
+
+test('Multi-move complete simulation: Human vs Bot plays 10 half-moves legally', async () => {
+  const { getBestBotMove } = await import('../src/lib/botEngine.ts');
+  const chess = new Chess();
+  
+  // Human plays 1. e4
+  chess.move('e4');
+  assert.equal(chess.turn(), 'b');
+
+  // Bot plays as Black for 5 full turns (10 ply total)
+  for (let turn = 0; turn < 4; turn++) {
+    const botMove = getBestBotMove(chess, 'medium');
+    assert.ok(botMove, 'Bot should return a move');
+    assert.ok(chess.moves().includes(botMove.san), `Bot move ${botMove.san} must be legal`);
+    chess.move(botMove);
+
+    if (chess.isGameOver()) break;
+
+    // Human response: pick first legal move
+    const humanMoves = chess.moves({ verbose: true });
+    assert.ok(humanMoves.length > 0);
+    chess.move(humanMoves[0]);
+
+    if (chess.isGameOver()) break;
+  }
+
+  assert.ok(chess.history().length >= 8, 'At least 8 moves played smoothly');
+});

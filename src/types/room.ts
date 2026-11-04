@@ -55,3 +55,4 @@ export interface GameRoom {
     blackRequested: boolean;
   };
 }
+

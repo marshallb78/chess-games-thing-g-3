@@ -1,7 +1,7 @@
 {
   "rules": {
     "profiles": {
-      ".read": "auth != null",
+      ".read": true,
       "$uid": {
         ".write": "auth != null && auth.uid === $uid",
         ".validate": "newData.hasChildren(['uid', 'displayName', 'publicId', 'createdAt'])",
@@ -14,6 +14,9 @@
         "publicId": {
           ".validate": "newData.isString() && newData.val().length <= 15"
         },
+        "about": {
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 200)"
+        },
         "createdAt": {
           ".validate": "newData.isNumber()"
         },
@@ -25,10 +28,41 @@
         }
       }
     },
+    "presence": {
+      ".read": true,
+      "$uid": {
+        ".write": "(auth != null && auth.uid === $uid) || (!data.exists() && newData.child('isGuest').val() === true) || (data.child('isGuest').val() === true)",
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'isOnline', 'lastSeen'])"
+      }
+    },
+    "matchmaking": {
+      "queue": {
+        ".read": true,
+        "$entryKey": {
+          ".write": "true",
+          ".validate": "newData.hasChildren(['queueKey', 'uid', 'displayName', 'timeControlId', 'createdAt'])"
+        }
+      }
+    },
+    "invitations": {
+      ".read": true,
+      "$invitationId": {
+        ".write": "true",
+        ".validate": "newData.hasChildren(['id', 'senderUid', 'senderName', 'recipientUid', 'timeControlId', 'status', 'createdAt'])"
+      }
+    },
+    "userInvitations": {
+      "$recipientUid": {
+        ".read": "auth != null ? auth.uid === $recipientUid : true",
+        "$invitationId": {
+          ".write": "true"
+        }
+      }
+    },
     "rooms": {
-      ".read": "auth != null",
+      ".read": true,
       "$roomId": {
-        ".write": "auth != null && (!data.exists() || data.child('hostUid').val() === auth.uid || data.child('players/white/uid').val() === auth.uid || data.child('players/black/uid').val() === auth.uid || !data.child('players/black').exists())",
+        ".write": "true",
         ".validate": "newData.hasChildren(['roomId', 'roomCode', 'hostUid', 'status', 'timeControlId', 'createdAt'])",
         "roomId": {
           ".validate": "newData.isString() && newData.val() === $roomId"
@@ -42,18 +76,36 @@
       }
     },
     "roomCodes": {
-      ".read": "auth != null",
+      ".read": true,
       "$code": {
-        ".write": "auth != null && (!data.exists() || root.child('rooms/' + data.val() + '/hostUid').val() === auth.uid)",
+        ".write": "true",
         ".validate": "newData.isString()"
       }
     },
     "chat": {
       "$roomId": {
-        ".read": "auth != null",
+        ".read": true,
         "$messageId": {
-          ".write": "auth != null && !data.exists() && newData.child('senderUid').val() === auth.uid",
+          ".write": "!data.exists()",
           ".validate": "newData.hasChildren(['senderUid', 'senderName', 'text', 'timestamp']) && newData.child('text').isString() && newData.child('text').val().length <= 200"
+        }
+      }
+    },
+    "friends": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null",
+        "$friendUid": {
+          ".validate": "newData.hasChildren(['uid', 'displayName', 'since'])"
+        }
+      }
+    },
+    "friendRequests": {
+      "$recipientUid": {
+        ".read": "auth != null && auth.uid === $recipientUid",
+        "$senderUid": {
+          ".write": "auth != null && (auth.uid === $senderUid || auth.uid === $recipientUid)",
+          ".validate": "newData.hasChildren(['fromUid', 'fromName', 'timestamp'])"
         }
       }
     }

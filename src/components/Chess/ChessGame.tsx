@@ -4,9 +4,11 @@ import {
   type TimeControlId,
   TIME_CONTROLS,
   type GameEndReason,
-  type MoveRecord
+  type MoveRecord,
+  type BotDifficulty
 } from '../../types/chess';
 import { getCapturedPieces } from '../../lib/chessUtils';
+import { getBestBotMove } from '../../lib/botEngine';
 import { soundManager } from '../../lib/sound';
 import { ChessBoardView } from './ChessBoardView';
 import { ChessClock } from './ChessClock';
@@ -20,7 +22,9 @@ import {
   Flag,
   Handshake,
   ArrowUpDown,
-  Home
+  Home,
+  Bot,
+  Loader2
 } from 'lucide-react';
 
 interface ChessGameProps {
@@ -30,7 +34,10 @@ interface ChessGameProps {
   whiteRating?: number;
   blackRating?: number;
   onReturnToLobby?: () => void;
-  // Online multiplayer hooks (used in Phase 4)
+  // Bot game options
+  isBotGame?: boolean;
+  botDifficulty?: BotDifficulty;
+  // Online multiplayer options
   isOnlineGame?: boolean;
   playerColor?: 'w' | 'b';
   onOnlineMove?: (move: { from: string; to: string; promotion?: string }) => void;
@@ -45,6 +52,8 @@ export const ChessGame: React.FC<ChessGameProps> = ({
   whiteRating,
   blackRating,
   onReturnToLobby,
+  isBotGame = false,
+  botDifficulty = 'medium',
   isOnlineGame = false,
   playerColor = 'w',
   onOnlineMove,
@@ -61,7 +70,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
 
   // Board orientation
   const [boardOrientation, setBoardOrientation] = useState<'white' | 'black'>(
-    isOnlineGame ? (playerColor === 'b' ? 'black' : 'white') : 'white'
+    isOnlineGame || isBotGame ? (playerColor === 'b' ? 'black' : 'white') : 'white'
   );
   const [autoFlip, setAutoFlip] = useState(false);
 
@@ -72,6 +81,10 @@ export const ChessGame: React.FC<ChessGameProps> = ({
 
   // Move history
   const [moves, setMoves] = useState<MoveRecord[]>([]);
+
+  // Bot thinking state
+  const [isBotThinking, setIsBotThinking] = useState(false);
+  const botTimerRef = useRef<number | null>(null);
 
   // Game over state
   const [isGameOver, setIsGameOver] = useState(false);
@@ -134,61 +147,18 @@ export const ChessGame: React.FC<ChessGameProps> = ({
     return false;
   }, [chess]);
 
-  // Clock countdown timer
-  useEffect(() => {
-    if (isGameOver || !gameStarted || isUntimed) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-
-    lastTickRef.current = Date.now();
-
-    timerRef.current = window.setInterval(() => {
-      const now = Date.now();
-      const elapsed = (now - lastTickRef.current) / 1000;
-      lastTickRef.current = now;
-
-      if (chess.turn() === 'w') {
-        setWhiteTime((prev) => {
-          const next = prev - elapsed;
-          if (next <= 0) {
-            setIsGameOver(true);
-            setWinner('b');
-            setEndReason('timeout');
-            setShowEndModal(true);
-            soundManager.playGameEnd(false);
-            return 0;
-          }
-          return next;
-        });
-      } else {
-        setBlackTime((prev) => {
-          const next = prev - elapsed;
-          if (next <= 0) {
-            setIsGameOver(true);
-            setWinner('w');
-            setEndReason('timeout');
-            setShowEndModal(true);
-            soundManager.playGameEnd(false);
-            return 0;
-          }
-          return next;
-        });
-      }
-    }, 100);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [chess, isGameOver, gameStarted, isUntimed]);
-
-  // Execute a move on the board
-  const makeMove = useCallback(
-    (from: Square, to: Square, promotion?: PieceSymbol): boolean => {
+  // Execute a move on the board (shared by human and bot)
+  const executeMove = useCallback(
+    (from: Square, to: Square, promotion?: PieceSymbol, isBotMove: boolean = false): boolean => {
       if (isGameOver) return false;
 
       // Online turn enforcement: can only move on your turn
       if (isOnlineGame && chess.turn() !== playerColor) {
+        return false;
+      }
+
+      // Bot turn enforcement: human can only move on human turn and when bot isn't thinking
+      if (isBotGame && !isBotMove && (chess.turn() !== playerColor || isBotThinking)) {
         return false;
       }
 
@@ -237,7 +207,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
         setMoves((prev) => [...prev, record]);
 
         // Auto-flip for local Pass & Play if enabled
-        if (autoFlip && !isOnlineGame) {
+        if (autoFlip && !isOnlineGame && !isBotGame) {
           setBoardOrientation(chess.turn() === 'w' ? 'white' : 'black');
         }
 
@@ -266,6 +236,8 @@ export const ChessGame: React.FC<ChessGameProps> = ({
       chess,
       isGameOver,
       isOnlineGame,
+      isBotGame,
+      isBotThinking,
       playerColor,
       isUntimed,
       tcConfig.incrementSeconds,
@@ -276,10 +248,97 @@ export const ChessGame: React.FC<ChessGameProps> = ({
     ]
   );
 
+  // BOT GAME RUNNER: watches for bot's turn and calculates response
+  useEffect(() => {
+    if (!isBotGame || isGameOver) {
+      if (botTimerRef.current) clearTimeout(botTimerRef.current);
+      setIsBotThinking(false);
+      return;
+    }
+
+    const botColor: Color = playerColor === 'w' ? 'b' : 'w';
+
+    if (chess.turn() === botColor) {
+      setIsBotThinking(true);
+      // Natural pacing delay so the move feels realistic and visible
+      botTimerRef.current = window.setTimeout(() => {
+        if (isGameOver) {
+          setIsBotThinking(false);
+          return;
+        }
+
+        const botMove = getBestBotMove(chess, botDifficulty);
+        if (botMove) {
+          executeMove(
+            botMove.from as Square,
+            botMove.to as Square,
+            botMove.promotion as PieceSymbol | undefined,
+            true
+          );
+        }
+        setIsBotThinking(false);
+      }, 450);
+    } else {
+      setIsBotThinking(false);
+    }
+
+    return () => {
+      if (botTimerRef.current) clearTimeout(botTimerRef.current);
+    };
+  }, [chess.fen(), isBotGame, isGameOver, playerColor, botDifficulty, executeMove, chess]);
+
+  // Clock countdown timer
+  useEffect(() => {
+    if (isGameOver || !gameStarted || isUntimed) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
+    }
+
+    lastTickRef.current = Date.now();
+
+    timerRef.current = window.setInterval(() => {
+      const now = Date.now();
+      const elapsed = (now - lastTickRef.current) / 1000;
+      lastTickRef.current = now;
+
+      if (chess.turn() === 'w') {
+        setWhiteTime((prev) => {
+          const next = prev - elapsed;
+          if (next <= 0) {
+            setIsGameOver(true);
+            setWinner('b');
+            setEndReason('timeout');
+            setShowEndModal(true);
+            soundManager.playGameEnd(false);
+            return 0;
+          }
+          return next;
+        });
+      } else {
+        setBlackTime((prev) => {
+          const next = prev - elapsed;
+          if (next <= 0) {
+            setIsGameOver(true);
+            setWinner('w');
+            setEndReason('timeout');
+            setShowEndModal(true);
+            soundManager.playGameEnd(false);
+            return 0;
+          }
+          return next;
+        });
+      }
+    }, 100);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [chess, isGameOver, gameStarted, isUntimed]);
+
   // Resignation
   const handleResign = () => {
     if (isGameOver) return;
-    const resigningColor = isOnlineGame ? playerColor : chess.turn();
+    const resigningColor = isOnlineGame || isBotGame ? playerColor : chess.turn();
     const winningColor: Color = resigningColor === 'w' ? 'b' : 'w';
 
     setIsGameOver(true);
@@ -296,10 +355,25 @@ export const ChessGame: React.FC<ChessGameProps> = ({
   // Draw offer
   const handleOfferDraw = () => {
     if (isGameOver) return;
+
+    if (isBotGame) {
+      // Bot evaluates whether position is balanced to accept draw
+      const isDrawnPos = Math.abs(moves.length) > 20;
+      if (isDrawnPos) {
+        setIsGameOver(true);
+        setWinner('draw');
+        setEndReason('draw_agreement');
+        setShowEndModal(true);
+        soundManager.playGameEnd(false);
+      } else {
+        alert('The bot declined your draw offer.');
+      }
+      return;
+    }
+
     const offeringColor = isOnlineGame ? playerColor : chess.turn();
 
     if (pendingDrawOffer && pendingDrawOffer !== offeringColor) {
-      // Opponent accepted previous draw offer!
       setIsGameOver(true);
       setWinner('draw');
       setEndReason('draw_agreement');
@@ -316,6 +390,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
 
   // Restart / Rematch
   const handleRematch = () => {
+    if (botTimerRef.current) clearTimeout(botTimerRef.current);
     chess.reset();
     setWhiteTime(tcConfig.initialSeconds);
     setBlackTime(tcConfig.initialSeconds);
@@ -326,7 +401,8 @@ export const ChessGame: React.FC<ChessGameProps> = ({
     setShowEndModal(false);
     setPendingDrawOffer(null);
     setGameStarted(false);
-    setBoardOrientation(isOnlineGame && playerColor === 'b' ? 'black' : 'white');
+    setIsBotThinking(false);
+    setBoardOrientation((isOnlineGame || isBotGame) && playerColor === 'b' ? 'black' : 'white');
     refreshBoard();
   };
 
@@ -340,10 +416,14 @@ export const ChessGame: React.FC<ChessGameProps> = ({
   const capturedInfo = getCapturedPieces(chess);
 
   const isWhiteTurn = chess.turn() === 'w';
-  const isInteractive = !isGameOver && (!isOnlineGame || chess.turn() === playerColor);
+  const isInteractive =
+    !isGameOver &&
+    !isBotThinking &&
+    (!isOnlineGame || chess.turn() === playerColor) &&
+    (!isBotGame || chess.turn() === playerColor);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', width: '100%', maxWidth: '1240px', margin: '0 auto' }}>
       {/* Top action header */}
       <div
         style={{
@@ -352,7 +432,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
           alignItems: 'center',
           flexWrap: 'wrap',
           gap: '0.75rem',
-          padding: '0.75rem 1rem',
+          padding: '0.65rem 1rem',
           background: 'var(--bg-card)',
           borderRadius: '12px',
           border: '1px solid var(--border-subtle)'
@@ -364,9 +444,9 @@ export const ChessGame: React.FC<ChessGameProps> = ({
               onClick={onReturnToLobby}
               className="btn-secondary"
               style={{ padding: '0.45rem 0.8rem', fontSize: '0.85rem' }}
-              title="Return to Game Lobby"
+              title="Return to Game Selection"
             >
-              <Home size={16} /> Lobby
+              <Home size={16} /> Back
             </button>
           )}
 
@@ -385,7 +465,26 @@ export const ChessGame: React.FC<ChessGameProps> = ({
               {tcConfig.name} ({tcConfig.category})
             </span>
 
-            {isOnlineGame && (
+            {isBotGame && (
+              <span
+                style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: 'var(--accent-cyan)',
+                  background: 'rgba(56, 189, 248, 0.1)',
+                  padding: '4px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Bot size={14} /> Bot: {botDifficulty.toUpperCase()}
+              </span>
+            )}
+
+            {(isOnlineGame || isBotGame) && (
               <span
                 style={{
                   fontSize: '0.8rem',
@@ -397,7 +496,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
                   border: '1px solid rgba(139, 92, 246, 0.3)'
                 }}
               >
-                Playing as {playerColor === 'w' ? 'White' : 'Black'}
+                You: {playerColor === 'w' ? 'White' : 'Black'}
               </span>
             )}
           </div>
@@ -415,7 +514,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
             <ArrowUpDown size={15} /> Flip Board
           </button>
 
-          {!isOnlineGame && (
+          {!isOnlineGame && !isBotGame && (
             <button
               onClick={() => setAutoFlip(!autoFlip)}
               className={autoFlip ? 'btn-primary' : 'btn-secondary'}
@@ -437,11 +536,11 @@ export const ChessGame: React.FC<ChessGameProps> = ({
         </div>
       </div>
 
-      {/* Main Board & Panel Layout */}
-      <div className="chess-layout">
-        {/* Left Column: Clocks, Captured Pieces & Board */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-          {/* Top Player (Black if oriented White, White if oriented Black) */}
+      {/* Main Board & Panel Layout - Maximized Space */}
+      <div className="chess-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 660px) 1fr', gap: '1.25rem', alignItems: 'start' }}>
+        {/* Left Column: Clocks, Captured Pieces & Maximized Board */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          {/* Top Player */}
           {boardOrientation === 'white' ? (
             <div>
               <ChessClock
@@ -480,13 +579,42 @@ export const ChessGame: React.FC<ChessGameProps> = ({
             </div>
           )}
 
-          {/* Interactive Chess Board */}
-          <ChessBoardView
-            chess={chess}
-            boardOrientation={boardOrientation}
-            isInteractive={isInteractive}
-            onMakeMove={makeMove}
-          />
+          {/* Interactive Maximized Chess Board */}
+          <div style={{ position: 'relative', width: '100%', maxWidth: '660px' }}>
+            <ChessBoardView
+              chess={chess}
+              boardOrientation={boardOrientation}
+              isInteractive={isInteractive}
+              onMakeMove={(from, to, promo) => executeMove(from, to, promo, false)}
+            />
+
+            {/* Subtle Overlay while Bot is Calculating */}
+            {isBotThinking && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  right: '12px',
+                  background: 'rgba(15, 23, 42, 0.88)',
+                  backdropFilter: 'blur(4px)',
+                  padding: '6px 12px',
+                  borderRadius: '20px',
+                  border: '1px solid var(--accent-cyan)',
+                  boxShadow: '0 4px 14px var(--accent-cyan-glow)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: 'var(--accent-cyan)',
+                  zIndex: 20
+                }}
+              >
+                <Loader2 size={14} className="animate-spin" />
+                <span>Bot thinking...</span>
+              </div>
+            )}
+          </div>
 
           {/* Bottom Player */}
           {boardOrientation === 'white' ? (
@@ -528,14 +656,14 @@ export const ChessGame: React.FC<ChessGameProps> = ({
           )}
         </div>
 
-        {/* Right Column: Move History, In-Game Controls & Status */}
+        {/* Right Column: Turn Info, Move History, Action Controls */}
         <div
           style={{
             display: 'flex',
             flexDirection: 'column',
             gap: '0.85rem',
             height: '100%',
-            minHeight: '440px'
+            minHeight: '480px'
           }}
         >
           {/* Turn indicator card */}
@@ -556,6 +684,8 @@ export const ChessGame: React.FC<ChessGameProps> = ({
                   borderRadius: '50%',
                   background: isGameOver
                     ? 'var(--accent-red)'
+                    : isBotThinking
+                    ? 'var(--accent-amber)'
                     : isWhiteTurn
                     ? '#ffffff'
                     : '#0284c7',
@@ -567,6 +697,12 @@ export const ChessGame: React.FC<ChessGameProps> = ({
               <span style={{ fontWeight: 600, fontSize: '0.92rem' }}>
                 {isGameOver
                   ? 'Game Over'
+                  : isBotThinking
+                  ? 'Computer Bot is calculating...'
+                  : isBotGame && chess.turn() !== playerColor
+                  ? "Bot's Turn"
+                  : isBotGame && chess.turn() === playerColor
+                  ? "Your Turn to Move"
                   : isWhiteTurn
                   ? `${whiteName}'s Turn (White)`
                   : `${blackName}'s Turn (Black)`}
@@ -591,7 +727,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
           </div>
 
           {/* Move History Panel */}
-          <div style={{ flex: 1, minHeight: '260px' }}>
+          <div style={{ flex: 1, minHeight: '300px' }}>
             <MoveHistory moves={moves} currentMoveIndex={moves.length - 1} />
           </div>
 

@@ -10,6 +10,8 @@ export type TimeControlId =
   | '15+10' 
   | 'untimed';
 
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
+
 export interface TimeControlConfig {
   id: TimeControlId;
   name: string;

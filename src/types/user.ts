@@ -18,6 +18,8 @@ export interface UserProfile {
   avatar: string;
   createdAt: number;
   lastActive: number;
+  about?: string;
+  isGuest?: boolean;
   stats: UserStats;
   ratings: {
     bullet: RatingInfo;
@@ -44,3 +46,4 @@ export interface MatchHistoryEntry {
   reason: string;
   movesCount: number;
 }
+
