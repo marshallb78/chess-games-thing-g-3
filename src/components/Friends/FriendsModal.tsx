@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import type { FriendEntry, IncomingFriendRequest, OnlinePresenceUser } from '../../lib/onlineService';
 import { onlineService } from '../../lib/onlineService';
+import { useToast } from '../../context/ToastContext';
+import { ConfirmModal } from '../Common/ConfirmModal';
 import { UserPlus, Users, Check, X, Search, Swords, UserMinus, ShieldAlert } from 'lucide-react';
 
 interface FriendsModalProps {
@@ -22,6 +24,7 @@ export const FriendsModal: React.FC<FriendsModalProps> = ({
   onInviteFriend,
   onOpenAuth
 }) => {
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'friends' | 'requests' | 'search'>('friends');
   const [friends, setFriends] = useState<FriendEntry[]>([]);
   const [requests, setRequests] = useState<IncomingFriendRequest[]>([]);
@@ -29,6 +32,7 @@ export const FriendsModal: React.FC<FriendsModalProps> = ({
   const [searchResults, setSearchResults] = useState<OnlinePresenceUser[]>([]);
   const [searching, setSearching] = useState(false);
   const [requestSentMap, setRequestSentMap] = useState<Record<string, boolean>>({});
+  const [friendToRemove, setFriendToRemove] = useState<FriendEntry | null>(null);
 
   useEffect(() => {
     if (!isOpen || !currentUser || currentUser.isGuest) return;
@@ -61,8 +65,9 @@ export const FriendsModal: React.FC<FriendsModalProps> = ({
     try {
       await onlineService.sendFriendRequest(currentUser, targetUid);
       setRequestSentMap((prev) => ({ ...prev, [targetUid]: true }));
+      showToast({ type: 'success', message: 'Friend request sent!' });
     } catch (err: unknown) {
-      alert((err as Error).message || 'Failed to send request');
+      showToast({ type: 'error', message: (err as Error).message || 'Failed to send request' });
     }
   };
 
@@ -212,13 +217,10 @@ export const FriendsModal: React.FC<FriendsModalProps> = ({
                         </button>
 
                         <button
-                          onClick={() => {
-                            if (currentUser && confirm(`Remove ${f.displayName} from friends?`)) {
-                              onlineService.removeFriend(currentUser.uid, f.uid);
-                            }
-                          }}
-                          style={{ background: 'transparent', color: 'var(--text-muted)', padding: '6px' }}
+                          onClick={() => setFriendToRemove(f)}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', padding: '6px', cursor: 'pointer' }}
                           title="Remove Friend"
+                          aria-label={`Remove ${f.displayName} from friends`}
                         >
                           <UserMinus size={15} />
                         </button>
@@ -339,6 +341,23 @@ export const FriendsModal: React.FC<FriendsModalProps> = ({
           </>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={!!friendToRemove}
+        title="Remove Friend"
+        message={friendToRemove ? `Are you sure you want to remove ${friendToRemove.displayName} from your friends list?` : ''}
+        confirmText="Remove"
+        variant="danger"
+        onConfirm={async () => {
+          if (currentUser && friendToRemove) {
+            await onlineService.removeFriend(currentUser.uid, friendToRemove.uid);
+            showToast({ type: 'info', message: `${friendToRemove.displayName} removed from friends.` });
+            setFriendToRemove(null);
+          }
+        }}
+        onCancel={() => setFriendToRemove(null)}
+      />
     </div>
   );
 };
+

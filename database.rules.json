@@ -52,8 +52,8 @@
       }
     },
     "userInvitations": {
+      ".read": true,
       "$recipientUid": {
-        ".read": "auth != null ? auth.uid === $recipientUid : true",
         "$invitationId": {
           ".write": "true"
         }

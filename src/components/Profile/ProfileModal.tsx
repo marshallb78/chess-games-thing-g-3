@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { UserProfile } from '../../types/user';
 import { ref, update } from 'firebase/database';
 import { rtdb } from '../../lib/firebase';
+import { useToast } from '../../context/ToastContext';
 import { X, ShieldCheck, Calendar, Clock, Trophy, Edit3, Check } from 'lucide-react';
 
 interface ProfileModalProps {
@@ -17,6 +18,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   profile,
   onProfileUpdated
 }) => {
+  const { showToast } = useToast();
   const [isEditing, setIsEditing] = useState(false);
   const [nameInput, setNameInput] = useState(profile?.displayName || '');
   const [aboutInput, setAboutInput] = useState(profile?.about || '');
@@ -53,8 +55,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
       if (onProfileUpdated) onProfileUpdated();
       setIsEditing(false);
+      showToast({ type: 'success', message: 'Profile updated successfully!' });
     } catch (err) {
-      alert((err as Error).message || 'Failed to update profile');
+      showToast({ type: 'error', message: (err as Error).message || 'Failed to update profile' });
     } finally {
       setSaving(false);
     }

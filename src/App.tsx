@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider, useToast } from './context/ToastContext';
+import { ToastContainer } from './components/Common/ToastContainer';
 import { Navbar } from './components/Navbar';
 import { HomeScreen } from './components/Screens/HomeScreen';
 import { ModeSelectScreen } from './components/Screens/ModeSelectScreen';
@@ -13,6 +15,7 @@ import { ProfileModal } from './components/Profile/ProfileModal';
 import { FriendsModal } from './components/Friends/FriendsModal';
 import { InvitationToast } from './components/Invitations/InvitationToast';
 import { InvitationModal } from './components/Invitations/InvitationModal';
+import { OutgoingChallengeModal } from './components/Invitations/OutgoingChallengeModal';
 import { roomService } from './lib/roomService';
 import { onlineService, type MatchInvitationData, type IncomingFriendRequest } from './lib/onlineService';
 import type { TimeControlId, BotDifficulty } from './types/chess';
@@ -29,6 +32,7 @@ type AppScreen =
 
 function MainApp() {
   const { currentUser, userProfile, isGuest, signOut, refreshProfile, playAsGuest } = useAuth();
+  const { showToast } = useToast();
 
   const [currentScreen, setCurrentScreen] = useState<AppScreen>('home');
 
@@ -49,9 +53,18 @@ function MainApp() {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [friendsModalOpen, setFriendsModalOpen] = useState(false);
 
-  // Invitations
+  // Incoming invitations
   const [incomingInvite, setIncomingInvite] = useState<MatchInvitationData | null>(null);
   const [viewingInvite, setViewingInvite] = useState<MatchInvitationData | null>(null);
+
+  // Outgoing match challenge
+  const [outgoingChallenge, setOutgoingChallenge] = useState<{
+    invitationId: string;
+    targetPlayerUid: string;
+    targetPlayerName: string;
+    targetPlayerRating?: number;
+    timeControlId: TimeControlId;
+  } | null>(null);
 
   // Friend requests count
   const [friendRequests, setFriendRequests] = useState<IncomingFriendRequest[]>([]);
@@ -90,33 +103,15 @@ function MainApp() {
     }
   }, [userProfile]);
 
-  // Handlers for Navigation
-  const handlePlayClick = () => {
-    if (!currentUser && !sessionStorage.getItem('g3_seen_auth_prompt')) {
-      sessionStorage.setItem('g3_seen_auth_prompt', 'true');
-      setAuthInitialMode('signin');
-      setAuthModalOpen(true);
-      return;
-    }
-    setCurrentScreen('mode_select');
-  };
-
-  const handleStartBotGame = (
-    tc: TimeControlId,
-    diff: BotDifficulty,
-    color: 'w' | 'b'
-  ) => {
+  // Game start handlers
+  const handleStartBotGame = (tc: TimeControlId, difficulty: BotDifficulty, playerColor: 'w' | 'b') => {
     setActiveTimeControl(tc);
-    setBotDifficulty(diff);
-    setBotPlayerColor(color);
+    setBotDifficulty(difficulty);
+    setBotPlayerColor(playerColor);
     setCurrentScreen('bot_game');
   };
 
-  const handleStartLocalGame = (
-    tc: TimeControlId,
-    whiteName: string,
-    blackName: string
-  ) => {
+  const handleStartLocalGame = (tc: TimeControlId, whiteName?: string, blackName?: string) => {
     setActiveTimeControl(tc);
     setLocalWhiteName(whiteName || 'White');
     setLocalBlackName(blackName || 'Black');
@@ -130,8 +125,9 @@ function MainApp() {
       setActiveRoomId(roomId);
       setActivePlayerColor('w');
       setCurrentScreen('online_game');
+      showToast({ type: 'success', message: 'Room created! Waiting for opponent.' });
     } catch (e) {
-      alert((e as Error).message || 'Failed to create room');
+      showToast({ type: 'error', message: (e as Error).message || 'Failed to create room' });
     }
   };
 
@@ -142,12 +138,70 @@ function MainApp() {
       setActiveRoomId(roomId);
       setActivePlayerColor(playerColor);
       setCurrentScreen('online_game');
+      showToast({ type: 'success', message: 'Joined room successfully!' });
     } catch (e) {
-      alert((e as Error).message || 'Failed to join room');
+      showToast({ type: 'error', message: (e as Error).message || 'Failed to join room' });
     }
   };
 
-  // Invitation handlers
+  // Outgoing Challenge Handler
+  const handleStartOutgoingChallenge = async (
+    targetPlayer: { uid: string; displayName: string; rating?: number },
+    timeControl: TimeControlId
+  ) => {
+    if (!userProfile) return;
+    try {
+      const inviteId = await onlineService.sendInvitation(
+        {
+          uid: userProfile.uid,
+          displayName: userProfile.displayName,
+          rating: userProfile.ratings?.rapid?.rating || 1200,
+          avatar: userProfile.avatar
+        },
+        targetPlayer.uid,
+        timeControl
+      );
+
+      setOutgoingChallenge({
+        invitationId: inviteId,
+        targetPlayerUid: targetPlayer.uid,
+        targetPlayerName: targetPlayer.displayName,
+        targetPlayerRating: targetPlayer.rating,
+        timeControlId: timeControl
+      });
+    } catch (err: unknown) {
+      showToast({ type: 'error', message: (err as Error).message || 'Failed to send challenge' });
+    }
+  };
+
+  const handleCancelOutgoingChallenge = async () => {
+    if (outgoingChallenge) {
+      await onlineService.cancelInvitation(outgoingChallenge.invitationId, outgoingChallenge.targetPlayerUid);
+      setOutgoingChallenge(null);
+    }
+  };
+
+  const handleReinviteOutgoingChallenge = async () => {
+    if (!outgoingChallenge || !userProfile) return;
+    try {
+      const inviteId = await onlineService.sendInvitation(
+        {
+          uid: userProfile.uid,
+          displayName: userProfile.displayName,
+          rating: userProfile.ratings?.rapid?.rating || 1200,
+          avatar: userProfile.avatar
+        },
+        outgoingChallenge.targetPlayerUid,
+        outgoingChallenge.timeControlId
+      );
+      setOutgoingChallenge((prev) => (prev ? { ...prev, invitationId: inviteId } : null));
+      showToast({ type: 'info', message: 'Challenge re-sent.' });
+    } catch (err: unknown) {
+      showToast({ type: 'error', message: (err as Error).message || 'Failed to re-send challenge' });
+    }
+  };
+
+  // Incoming Invitation Handlers
   const handleAcceptInvitation = async (invitation: MatchInvitationData) => {
     if (!userProfile) return;
     try {
@@ -157,8 +211,9 @@ function MainApp() {
       setActiveRoomId(roomId);
       setActivePlayerColor('b'); // Recipient plays as Black
       setCurrentScreen('online_game');
+      showToast({ type: 'success', message: 'Challenge accepted! Entering match.' });
     } catch (e) {
-      alert((e as Error).message || 'Failed to accept invitation');
+      showToast({ type: 'error', message: (e as Error).message || 'Failed to accept invitation' });
     }
   };
 
@@ -167,6 +222,7 @@ function MainApp() {
     await onlineService.declineInvitation(invitationId, userProfile.uid);
     setIncomingInvite(null);
     setViewingInvite(null);
+    showToast({ type: 'info', message: 'Invitation declined.' });
   };
 
   return (
@@ -190,33 +246,46 @@ function MainApp() {
             ? { uid: userProfile.uid, displayName: userProfile.displayName, isGuest: true }
             : null
         }
+        friendRequestsCount={friendRequests.length}
         onOpenAuth={() => {
           setAuthInitialMode('signin');
           setAuthModalOpen(true);
         }}
         onOpenProfile={() => setProfileModalOpen(true)}
         onOpenFriends={() => setFriendsModalOpen(true)}
-        onSignOut={signOut}
+        onSignOut={async () => {
+          await signOut();
+          setCurrentScreen('home');
+          showToast({ type: 'info', message: 'Signed out.' });
+        }}
         onGoHome={() => setCurrentScreen('home')}
-        friendRequestsCount={friendRequests.length}
       />
 
-      {/* Main Content Area */}
+      {/* Dynamic Screen View */}
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* 1. HOME SCREEN */}
         {currentScreen === 'home' && (
           <HomeScreen
-            onPlay={handlePlayClick}
+            onPlay={() => {
+              if (!currentUser && !isGuest) {
+                playAsGuest();
+              }
+              setCurrentScreen('mode_select');
+            }}
             onOpenAuth={() => {
               setAuthInitialMode('signin');
               setAuthModalOpen(true);
             }}
-            currentUser={currentUser ? { uid: currentUser.uid, displayName: currentUser.displayName } : null}
+            currentUser={
+              currentUser
+                ? { uid: currentUser.uid, displayName: currentUser.displayName }
+                : userProfile
+                ? { uid: userProfile.uid, displayName: userProfile.displayName }
+                : null
+            }
             onOpenProfile={() => setProfileModalOpen(true)}
           />
         )}
 
-        {/* 2. MODE SELECT SCREEN (Exactly 3 main cards) */}
         {currentScreen === 'mode_select' && (
           <ModeSelectScreen
             onSelectMode={(mode) => {
@@ -228,7 +297,6 @@ function MainApp() {
           />
         )}
 
-        {/* 3. BOT SETUP SCREEN */}
         {currentScreen === 'bot_setup' && (
           <BotSetupScreen
             onStartGame={handleStartBotGame}
@@ -236,7 +304,6 @@ function MainApp() {
           />
         )}
 
-        {/* 4. LOCAL SETUP SCREEN */}
         {currentScreen === 'local_setup' && (
           <LocalSetupScreen
             onStartGame={handleStartLocalGame}
@@ -244,7 +311,6 @@ function MainApp() {
           />
         )}
 
-        {/* 5. ONLINE LOBBY SCREEN */}
         {currentScreen === 'online_lobby' && userProfile && (
           <OnlineLobbyScreen
             currentUser={userProfile}
@@ -258,12 +324,14 @@ function MainApp() {
             onCreateRoomCode={handleCreateRoomCode}
             onJoinRoomCode={handleJoinByRoomCode}
             onOpenFriends={() => setFriendsModalOpen(true)}
+            onChallengePlayer={(player, tc) => {
+              handleStartOutgoingChallenge(player, tc);
+            }}
           />
         )}
 
-        {/* 6. BOT CHESS GAME */}
         {currentScreen === 'bot_game' && (
-          <div style={{ flex: 1, padding: '1rem', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ maxWidth: '1100px', margin: '0 auto', width: '100%', padding: '0.75rem' }}>
             <ChessGame
               timeControlId={activeTimeControl}
               isBotGame={true}
@@ -271,56 +339,51 @@ function MainApp() {
               playerColor={botPlayerColor}
               whiteName={botPlayerColor === 'w' ? userProfile?.displayName || 'You' : `Bot (${botDifficulty})`}
               blackName={botPlayerColor === 'b' ? userProfile?.displayName || 'You' : `Bot (${botDifficulty})`}
-              onReturnToLobby={() => setCurrentScreen('mode_select')}
+              onReturnToLobby={() => setCurrentScreen('home')}
             />
           </div>
         )}
 
-        {/* 7. LOCAL 2P CHESS GAME */}
         {currentScreen === 'local_game' && (
-          <div style={{ flex: 1, padding: '1rem', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ maxWidth: '1100px', margin: '0 auto', width: '100%', padding: '0.75rem' }}>
             <ChessGame
               timeControlId={activeTimeControl}
-              isBotGame={false}
-              isOnlineGame={false}
               whiteName={localWhiteName}
               blackName={localBlackName}
-              onReturnToLobby={() => setCurrentScreen('mode_select')}
+              onReturnToLobby={() => setCurrentScreen('home')}
             />
           </div>
         )}
 
-        {/* 8. ONLINE MULTIPLAYER CHESS GAME */}
         {currentScreen === 'online_game' && activeRoomId && userProfile && (
-          <div style={{ flex: 1, padding: '1rem', display: 'flex', justifyContent: 'center' }}>
-            <OnlineRoomView
-              roomId={activeRoomId}
-              userProfile={userProfile}
-              playerColor={activePlayerColor}
-              onLeaveRoom={() => {
-                setActiveRoomId(null);
-                setCurrentScreen('online_lobby');
-              }}
-            />
-          </div>
+          <OnlineRoomView
+            roomId={activeRoomId}
+            userProfile={userProfile}
+            playerColor={activePlayerColor}
+            onLeaveRoom={() => {
+              setActiveRoomId(null);
+              setCurrentScreen('online_lobby');
+            }}
+          />
         )}
       </main>
 
-      {/* MODALS */}
+      {/* Global Modals */}
       <AuthModal
         isOpen={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
         initialMode={authInitialMode}
+        onClose={() => setAuthModalOpen(false)}
         onPlayAsGuest={() => {
           playAsGuest();
-          setCurrentScreen('mode_select');
+          setAuthModalOpen(false);
+          showToast({ type: 'info', message: 'Playing as Guest' });
         }}
       />
 
       <ProfileModal
         isOpen={profileModalOpen}
-        onClose={() => setProfileModalOpen(false)}
         profile={userProfile}
+        onClose={() => setProfileModalOpen(false)}
         onProfileUpdated={refreshProfile}
       />
 
@@ -334,21 +397,8 @@ function MainApp() {
             ? { uid: userProfile.uid, displayName: userProfile.displayName, isGuest: true }
             : null
         }
-        onInviteFriend={(friendUid) => {
-          if (!userProfile) return;
-          onlineService
-            .sendInvitation(
-              {
-                uid: userProfile.uid,
-                displayName: userProfile.displayName,
-                rating: userProfile.ratings?.rapid?.rating || 1200,
-                avatar: userProfile.avatar
-              },
-              friendUid,
-              activeTimeControl
-            )
-            .then(() => alert('Match invitation sent to friend!'))
-            .catch((e) => alert((e as Error).message || 'Failed to send invite'));
+        onInviteFriend={(friendUid, friendName) => {
+          handleStartOutgoingChallenge({ uid: friendUid, displayName: friendName }, activeTimeControl);
         }}
         onOpenAuth={() => {
           setFriendsModalOpen(false);
@@ -364,6 +414,23 @@ function MainApp() {
         onDecline={handleDeclineInvitation}
         onClose={() => setViewingInvite(null)}
       />
+
+      {/* Outgoing Challenge Status Modal */}
+      <OutgoingChallengeModal
+        invitationId={outgoingChallenge?.invitationId || null}
+        targetPlayerName={outgoingChallenge?.targetPlayerName || 'Opponent'}
+        targetPlayerRating={outgoingChallenge?.targetPlayerRating}
+        timeControlId={outgoingChallenge?.timeControlId || '10+0'}
+        onMatchStarted={(roomId) => {
+          setOutgoingChallenge(null);
+          setActiveRoomId(roomId);
+          setActivePlayerColor('w'); // Challenger is White
+          setCurrentScreen('online_game');
+          showToast({ type: 'success', message: 'Challenge accepted! Match starting.' });
+        }}
+        onCancel={handleCancelOutgoingChallenge}
+        onInviteAgain={handleReinviteOutgoingChallenge}
+      />
     </div>
   );
 }
@@ -371,7 +438,10 @@ function MainApp() {
 export function App() {
   return (
     <AuthProvider>
-      <MainApp />
+      <ToastProvider>
+        <MainApp />
+        <ToastContainer />
+      </ToastProvider>
     </AuthProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { MatchInvitationData } from '../../lib/onlineService';
 import { Swords, Eye, X } from 'lucide-react';
 
@@ -13,6 +13,26 @@ export const InvitationToast: React.FC<InvitationToastProps> = ({
   onView,
   onDecline
 }) => {
+  const [secondsRemaining, setSecondsRemaining] = useState(60);
+
+  useEffect(() => {
+    if (!invitation) return;
+
+    const expiresAt = invitation.expiresAt || invitation.createdAt + 60000;
+    const initialSec = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+    setSecondsRemaining(initialSec);
+
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      setSecondsRemaining(remaining);
+      if (remaining <= 0) {
+        clearInterval(timer);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [invitation]);
+
   if (!invitation) return null;
 
   return (
@@ -22,8 +42,9 @@ export const InvitationToast: React.FC<InvitationToastProps> = ({
         top: '20px',
         left: '20px',
         zIndex: 9999,
-        background: 'rgba(15, 23, 42, 0.95)',
-        backdropFilter: 'blur(10px)',
+        background: 'rgba(15, 23, 42, 0.96)',
+        backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
         border: '1.5px solid var(--accent-cyan)',
         boxShadow: '0 12px 32px rgba(0, 0, 0, 0.7), 0 0 20px var(--accent-cyan-glow)',
         borderRadius: '14px',
@@ -33,8 +54,9 @@ export const InvitationToast: React.FC<InvitationToastProps> = ({
         display: 'flex',
         flexDirection: 'column',
         gap: '0.65rem',
-        animation: 'slideInLeft 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+        animation: 'slideInLeft 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
       }}
+      role="alert"
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -57,15 +79,22 @@ export const InvitationToast: React.FC<InvitationToastProps> = ({
               {invitation.senderName}
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Invited you to a match ({invitation.timeControlId})
+              Challenged you to {invitation.timeControlId} ({secondsRemaining}s)
             </div>
           </div>
         </div>
 
         <button
           onClick={() => onDecline(invitation.id)}
-          style={{ background: 'transparent', color: 'var(--text-muted)', padding: '2px' }}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-muted)',
+            padding: '2px',
+            cursor: 'pointer'
+          }}
           title="Decline & Dismiss"
+          aria-label="Decline match invitation"
         >
           <X size={16} />
         </button>

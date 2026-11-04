@@ -38,8 +38,9 @@ export interface MatchInvitationData {
   senderAvatar?: string;
   recipientUid: string;
   timeControlId: TimeControlId;
-  status: 'pending' | 'accepted' | 'declined' | 'expired';
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
   createdAt: number;
+  expiresAt: number;
   roomId?: string;
 }
 
@@ -61,7 +62,7 @@ export interface IncomingFriendRequest {
 
 export const onlineService = {
   /**
-   * Set up real-time presence with onDisconnect automatic cleanup
+   * Set up real-time presence with .info/connected and onDisconnect automatic cleanup
    */
   trackPresence(user: {
     uid: string;
@@ -76,6 +77,7 @@ export const onlineService = {
     draws?: number;
   }): () => void {
     const presenceRef = ref(rtdb, `presence/${user.uid}`);
+    const connectedRef = ref(rtdb, '.info/connected');
 
     const presenceData: OnlinePresenceUser = {
       uid: user.uid,
@@ -92,21 +94,87 @@ export const onlineService = {
       draws: user.draws || 0
     };
 
-    set(presenceRef, presenceData).catch(() => {});
+    let heartbeatTimer: number | null = null;
+    let unsubConnected: Unsubscribe | null = null;
 
-    // On disconnect, mark offline
-    const disconnectHandler = onDisconnect(presenceRef);
-    disconnectHandler.set({ ...presenceData, isOnline: false, lastSeen: Date.now() });
+    unsubConnected = onValue(connectedRef, (snap) => {
+      if (snap.val() === true) {
+        // Connected to RTDB server: register onDisconnect
+        const disconnectHandler = onDisconnect(presenceRef);
+        disconnectHandler.update({
+          isOnline: false,
+          lastSeen: Date.now()
+        });
 
-    // Periodic heartbeat every 60s
-    const interval = window.setInterval(() => {
-      update(presenceRef, { lastSeen: Date.now(), isOnline: true }).catch(() => {});
-    }, 60000);
+        // Set live presence
+        update(presenceRef, {
+          ...presenceData,
+          lastSeen: Date.now(),
+          isOnline: true
+        }).catch(() => {});
+
+        // Periodic heartbeat every 30s to keep lastSeen current
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        heartbeatTimer = window.setInterval(() => {
+          update(presenceRef, {
+            lastSeen: Date.now(),
+            isOnline: true
+          }).catch(() => {});
+        }, 30000);
+      }
+    });
 
     return () => {
-      clearInterval(interval);
-      disconnectHandler.cancel();
-      update(presenceRef, { isOnline: false, lastSeen: Date.now() }).catch(() => {});
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (unsubConnected) unsubConnected();
+      update(presenceRef, {
+        isOnline: false,
+        lastSeen: Date.now()
+      }).catch(() => {});
+    };
+  },
+
+  /**
+   * Listen to the real count of active online players in RTDB
+   */
+  subscribeToOnlineCount(
+    callback: (count: number | null, isConnected: boolean) => void
+  ): Unsubscribe {
+    const presenceRef = ref(rtdb, 'presence');
+    const connectedRef = ref(rtdb, '.info/connected');
+
+    let isDbConnected = false;
+    const unsubConn = onValue(connectedRef, (snap) => {
+      isDbConnected = snap.val() === true;
+    });
+
+    const unsubPresence = onValue(
+      presenceRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          callback(0, isDbConnected);
+          return;
+        }
+
+        const raw = snapshot.val() as Record<string, OnlinePresenceUser>;
+        const now = Date.now();
+        // A player is counted if isOnline is true and lastSeen within last 120 seconds (2 mins)
+        // Deduplicate: keyed by unique UID in presence node
+        const activeUsers = Object.values(raw).filter(
+          (p) => p && p.isOnline === true && now - (p.lastSeen || 0) < 120000
+        );
+
+        callback(activeUsers.length, isDbConnected);
+      },
+      (err) => {
+        console.warn('Presence count listener error:', err);
+        callback(null, false);
+      }
+    );
+
+    return () => {
+      unsubConn();
+      unsubPresence();
     };
   },
 
@@ -126,7 +194,7 @@ export const onlineService = {
           (p) =>
             p.uid !== selfUid &&
             p.isOnline === true &&
-            now - p.lastSeen < 180000 // Active within last 3 minutes
+            now - p.lastSeen < 120000 // Active within last 2 minutes
         );
         callback(active);
       } else {
@@ -284,6 +352,7 @@ export const onlineService = {
     const inviteId = newInviteRef.key;
     if (!inviteId) throw new Error('Failed to create invitation');
 
+    const now = Date.now();
     const inviteData: MatchInvitationData = {
       id: inviteId,
       senderUid: sender.uid,
@@ -293,7 +362,8 @@ export const onlineService = {
       recipientUid,
       timeControlId,
       status: 'pending',
-      createdAt: Date.now()
+      createdAt: now,
+      expiresAt: now + 60000 // 60s
     };
 
     await set(newInviteRef, inviteData);
@@ -301,6 +371,24 @@ export const onlineService = {
     await set(ref(rtdb, `userInvitations/${recipientUid}/${inviteId}`), true);
 
     return inviteId;
+  },
+
+  /**
+   * Sender cancels an invitation while still pending
+   */
+  async cancelInvitation(invitationId: string, recipientUid: string): Promise<void> {
+    await update(ref(rtdb, `invitations/${invitationId}`), { status: 'cancelled' }).catch(() => {});
+    await remove(ref(rtdb, `userInvitations/${recipientUid}/${invitationId}`)).catch(() => {});
+  },
+
+  /**
+   * Mark invitation expired after timeout
+   */
+  async markInvitationExpired(invitationId: string, recipientUid?: string): Promise<void> {
+    await update(ref(rtdb, `invitations/${invitationId}`), { status: 'expired' }).catch(() => {});
+    if (recipientUid) {
+      await remove(ref(rtdb, `userInvitations/${recipientUid}/${invitationId}`)).catch(() => {});
+    }
   },
 
   /**
@@ -314,16 +402,25 @@ export const onlineService = {
     return onValue(inboxRef, async (snapshot) => {
       if (snapshot.exists()) {
         const inviteIds = Object.keys(snapshot.val());
-        if (inviteIds.length > 0) {
-          const latestId = inviteIds[inviteIds.length - 1];
-          const inviteSnap = await get(ref(rtdb, `invitations/${latestId}`));
+        const now = Date.now();
+
+        // Find the latest valid pending invitation
+        for (let i = inviteIds.length - 1; i >= 0; i--) {
+          const inviteId = inviteIds[i];
+          const inviteSnap = await get(ref(rtdb, `invitations/${inviteId}`));
           if (inviteSnap.exists()) {
             const data = inviteSnap.val() as MatchInvitationData;
-            // Only trigger if pending and not expired (> 2 mins)
-            if (data.status === 'pending' && Date.now() - data.createdAt < 120000) {
+            const expiresAt = data.expiresAt || data.createdAt + 60000;
+
+            if (data.status === 'pending' && now < expiresAt) {
               callback(data);
               return;
+            } else if (data.status !== 'pending' || now >= expiresAt) {
+              // Clean up non-pending or expired from recipient inbox
+              remove(ref(rtdb, `userInvitations/${selfUid}/${inviteId}`)).catch(() => {});
             }
+          } else {
+            remove(ref(rtdb, `userInvitations/${selfUid}/${inviteId}`)).catch(() => {});
           }
         }
       }
@@ -335,8 +432,8 @@ export const onlineService = {
    * Decline an invitation
    */
   async declineInvitation(invitationId: string, recipientUid: string): Promise<void> {
-    await update(ref(rtdb, `invitations/${invitationId}`), { status: 'declined' });
-    await remove(ref(rtdb, `userInvitations/${recipientUid}/${invitationId}`));
+    await update(ref(rtdb, `invitations/${invitationId}`), { status: 'declined' }).catch(() => {});
+    await remove(ref(rtdb, `userInvitations/${recipientUid}/${invitationId}`)).catch(() => {});
   },
 
   /**
@@ -347,88 +444,129 @@ export const onlineService = {
     recipient: { uid: string; displayName: string; rating?: number }
   ): Promise<string> {
     const inviteRef = ref(rtdb, `invitations/${invitation.id}`);
+    const snap = await get(inviteRef);
 
-    // Verify still pending via transaction
-    let assignedRoomId: string | null = null;
+    if (!snap.exists()) {
+      throw new Error('This invitation no longer exists.');
+    }
 
-    const tx = await runTransaction(inviteRef, (current: MatchInvitationData | null) => {
-      if (!current || current.status !== 'pending') return; // abort
+    const current = snap.val() as MatchInvitationData;
 
-      const roomRef = push(ref(rtdb, 'rooms'));
-      const roomId = roomRef.key;
-      if (!roomId) return;
+    if (current.recipientUid !== recipient.uid) {
+      throw new Error('You are not the intended recipient of this invitation.');
+    }
 
-      const tc = TIME_CONTROLS[invitation.timeControlId] || TIME_CONTROLS['10+0'];
-      const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // If already accepted and roomId exists (e.g. duplicate accept click), safely return room ID
+    if (current.status === 'accepted' && current.roomId) {
+      await remove(ref(rtdb, `userInvitations/${recipient.uid}/${invitation.id}`)).catch(() => {});
+      return current.roomId;
+    }
 
-      current.status = 'accepted';
-      current.roomId = roomId;
-      assignedRoomId = roomId;
+    if (current.status === 'declined') {
+      throw new Error('This invitation was already declined.');
+    }
 
-      // Create room synchronously
-      const room: GameRoom = {
-        roomId,
-        roomCode,
-        hostUid: invitation.senderUid,
-        status: 'playing',
-        timeControlId: invitation.timeControlId,
-        createdAt: Date.now(),
-        lastActivityAt: Date.now(),
-        players: {
-          white: {
-            uid: invitation.senderUid,
-            displayName: invitation.senderName,
-            connected: true,
-            rating: invitation.senderRating
-          },
-          black: {
-            uid: recipient.uid,
-            displayName: recipient.displayName,
-            connected: true,
-            rating: recipient.rating
-          }
+    if (current.status === 'cancelled') {
+      throw new Error('The challenger cancelled this invitation.');
+    }
+
+    const expiresAt = current.expiresAt || current.createdAt + 60000;
+    // Allow 5-second grace window for slight clock skew
+    if (Date.now() > expiresAt + 5000 || current.status === 'expired') {
+      await update(inviteRef, { status: 'expired' }).catch(() => {});
+      await remove(ref(rtdb, `userInvitations/${recipient.uid}/${invitation.id}`)).catch(() => {});
+      throw new Error('This invitation has expired.');
+    }
+
+    // Generate room details
+    const roomRef = push(ref(rtdb, 'rooms'));
+    const roomId = roomRef.key;
+    if (!roomId) throw new Error('Failed to generate match room');
+
+    const tc = TIME_CONTROLS[invitation.timeControlId] || TIME_CONTROLS['10+0'];
+    const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    // Setup GameRoom object
+    const room: GameRoom = {
+      roomId,
+      roomCode,
+      hostUid: current.senderUid,
+      status: 'playing',
+      timeControlId: current.timeControlId,
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      players: {
+        white: {
+          uid: current.senderUid,
+          displayName: current.senderName,
+          connected: true,
+          rating: current.senderRating
         },
-        gameState: {
-          fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-          turn: 'w',
-          isCheck: false,
-          lastMove: null,
-          whiteTime: tc.initialSeconds,
-          blackTime: tc.initialSeconds,
-          lastMoveTimestamp: Date.now(),
-          isGameOver: false,
-          winner: null,
-          endReason: null,
-          drawOffer: null
-        },
-        rematch: {
-          whiteRequested: false,
-          blackRequested: false
+        black: {
+          uid: recipient.uid,
+          displayName: recipient.displayName,
+          connected: true,
+          rating: recipient.rating
         }
-      };
+      },
+      gameState: {
+        fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+        turn: 'w',
+        isCheck: false,
+        lastMove: null,
+        whiteTime: tc.initialSeconds,
+        blackTime: tc.initialSeconds,
+        lastMoveTimestamp: Date.now(),
+        isGameOver: false,
+        winner: null,
+        endReason: null,
+        drawOffer: null
+      },
+      rematch: {
+        whiteRequested: false,
+        blackRequested: false
+      }
+    };
 
-      set(ref(rtdb, `rooms/${roomId}`), room).catch(() => {});
-      set(ref(rtdb, `roomCodes/${roomCode}`), roomId).catch(() => {});
+    // Commit room first so both players can read it immediately
+    await set(ref(rtdb, `rooms/${roomId}`), room);
+    await set(ref(rtdb, `roomCodes/${roomCode}`), roomId);
 
-      return current;
+    // Atomically transition invitation to accepted
+    const tx = await runTransaction(inviteRef, (existing: MatchInvitationData | null) => {
+      // Return existing when null so Firebase continues fetching from server!
+      if (existing === null) return existing;
+      if (existing.status !== 'pending') return; // Abort if resolved by someone else
+      existing.status = 'accepted';
+      existing.roomId = roomId;
+      return existing;
     });
 
-    if (!tx.committed || !assignedRoomId) {
+    if (!tx.committed) {
+      // If someone else claimed it, check if they set a roomId
+      const recheck = await get(inviteRef);
+      if (recheck.exists()) {
+        const updated = recheck.val() as MatchInvitationData;
+        if (updated.status === 'accepted' && updated.roomId) {
+          await remove(ref(rtdb, `userInvitations/${recipient.uid}/${invitation.id}`)).catch(() => {});
+          return updated.roomId;
+        }
+      }
       throw new Error('This invitation has already expired or been resolved.');
     }
 
     // Clean up recipient inbox
-    await remove(ref(rtdb, `userInvitations/${recipient.uid}/${invitation.id}`));
+    await remove(ref(rtdb, `userInvitations/${recipient.uid}/${invitation.id}`)).catch(() => {});
 
-    return assignedRoomId;
+    return roomId;
   },
 
   /**
-   * Listen to an invitation you sent (to see if it was accepted or declined)
+   * Listen to an invitation you sent (to see if it was accepted, declined, or expired)
    */
   listenToSentInvitation(
     invitationId: string,
-    onStatusChange: (status: 'accepted' | 'declined' | 'pending' | 'expired', roomId?: string) => void
+    onStatusChange: (status: 'accepted' | 'declined' | 'pending' | 'expired' | 'cancelled', roomId?: string) => void
   ): Unsubscribe {
     const inviteRef = ref(rtdb, `invitations/${invitationId}`);
     return onValue(inviteRef, (snapshot) => {

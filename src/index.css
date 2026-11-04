@@ -198,6 +198,46 @@ input:focus, select:focus, textarea:focus {
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes heroFloat {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(0.4deg); }
+  100% { transform: translateY(0px) rotate(0deg); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.65; transform: scale(1.08); }
+}
+
+@keyframes startupPieceAppear {
+  0% { opacity: 0; transform: scale(0.92) translateY(16px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes startupTitleAppear {
+  0% { opacity: 0; transform: translateY(-12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes startupButtonAppear {
+  0% { opacity: 0; transform: translateY(16px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.85); }

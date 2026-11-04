@@ -15,6 +15,8 @@ import { ChessClock } from './ChessClock';
 import { CapturedPieces } from './CapturedPieces';
 import { MoveHistory } from './MoveHistory';
 import { GameOverModal } from './GameOverModal';
+import { ConfirmModal } from '../Common/ConfirmModal';
+import { useToast } from '../../context/ToastContext';
 import {
   RotateCcw,
   Volume2,
@@ -91,6 +93,11 @@ export const ChessGame: React.FC<ChessGameProps> = ({
   const [winner, setWinner] = useState<Color | 'draw' | null>(null);
   const [endReason, setEndReason] = useState<GameEndReason | null>(null);
   const [showEndModal, setShowEndModal] = useState(false);
+  const [showResignModal, setShowResignModal] = useState(false);
+  const [showRestartModal, setShowRestartModal] = useState(false);
+
+  // Toast notifications
+  const { showToast } = useToast();
 
   // Draw offer state
   const [pendingDrawOffer, setPendingDrawOffer] = useState<Color | null>(null);
@@ -366,7 +373,11 @@ export const ChessGame: React.FC<ChessGameProps> = ({
         setShowEndModal(true);
         soundManager.playGameEnd(false);
       } else {
-        alert('The bot declined your draw offer.');
+        showToast({
+          type: 'info',
+          title: 'Draw Offer Declined',
+          message: 'The computer bot evaluated the current position and declined your draw offer.'
+        });
       }
       return;
     }
@@ -765,7 +776,7 @@ export const ChessGame: React.FC<ChessGameProps> = ({
                 </button>
 
                 <button
-                  onClick={handleResign}
+                  onClick={() => setShowResignModal(true)}
                   className="btn-danger"
                   style={{ padding: '0.6rem', fontSize: '0.85rem' }}
                   title="Resign the game"
@@ -777,6 +788,36 @@ export const ChessGame: React.FC<ChessGameProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Resignation Confirmation Dialog */}
+      <ConfirmModal
+        isOpen={showResignModal}
+        title="Resign Match"
+        message="Are you sure you want to resign? This will end the game immediately and record a loss."
+        confirmText="Resign"
+        cancelText="Keep Playing"
+        variant="danger"
+        onConfirm={() => {
+          setShowResignModal(false);
+          handleResign();
+        }}
+        onCancel={() => setShowResignModal(false)}
+      />
+
+      {/* Restart / New Game Confirmation Dialog */}
+      <ConfirmModal
+        isOpen={showRestartModal}
+        title="Restart Match"
+        message="Are you sure you want to restart? Your current board position and clock time will be reset."
+        confirmText="Restart"
+        cancelText="Cancel"
+        variant="warning"
+        onConfirm={() => {
+          setShowRestartModal(false);
+          handleRematch();
+        }}
+        onCancel={() => setShowRestartModal(false)}
+      />
 
       {/* Game Over Results Modal */}
       {showEndModal && (

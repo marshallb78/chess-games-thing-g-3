@@ -3,6 +3,7 @@ import type { TimeControlId } from '../../types/chess';
 import { TIME_CONTROLS } from '../../types/chess';
 import type { OnlinePresenceUser } from '../../lib/onlineService';
 import { onlineService } from '../../lib/onlineService';
+import { useToast } from '../../context/ToastContext';
 import { TimeControlPicker } from '../Chess/TimeControlPicker';
 import {
   ArrowLeft,
@@ -30,6 +31,7 @@ interface OnlineLobbyScreenProps {
   onCreateRoomCode: (timeControlId: TimeControlId) => void;
   onJoinRoomCode: (code: string) => void;
   onOpenFriends: () => void;
+  onChallengePlayer: (player: OnlinePresenceUser, timeControlId: TimeControlId) => void;
 }
 
 export const OnlineLobbyScreen: React.FC<OnlineLobbyScreenProps> = ({
@@ -39,8 +41,10 @@ export const OnlineLobbyScreen: React.FC<OnlineLobbyScreenProps> = ({
   onJoinRoom,
   onCreateRoomCode,
   onJoinRoomCode,
-  onOpenFriends
+  onOpenFriends,
+  onChallengePlayer
 }) => {
+  const { showToast } = useToast();
   const [selectedTimeControl, setSelectedTimeControl] = useState<TimeControlId>('10+0');
   const [onlinePlayers, setOnlinePlayers] = useState<OnlinePresenceUser[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState<OnlinePresenceUser | null>(null);
@@ -103,22 +107,8 @@ export const OnlineLobbyScreen: React.FC<OnlineLobbyScreenProps> = ({
     setSearchFailed(false);
   };
 
-  const handleSendChallenge = async (player: OnlinePresenceUser) => {
-    try {
-      await onlineService.sendInvitation(
-        {
-          uid: currentUser.uid,
-          displayName: currentUser.displayName,
-          rating: currentUser.rating,
-          avatar: currentUser.avatar
-        },
-        player.uid,
-        selectedTimeControl
-      );
-      alert(`Challenge sent to ${player.displayName}! They will receive a notification.`);
-    } catch (err: unknown) {
-      alert((err as Error).message || 'Failed to send challenge');
-    }
+  const handleSendChallenge = (player: OnlinePresenceUser) => {
+    onChallengePlayer(player, selectedTimeControl);
   };
 
   return (
@@ -303,7 +293,12 @@ export const OnlineLobbyScreen: React.FC<OnlineLobbyScreenProps> = ({
                 />
                 <button
                   onClick={() => {
-                    if (roomCodeInput.trim()) onJoinRoomCode(roomCodeInput.trim());
+                    const code = roomCodeInput.trim();
+                    if (code.length < 4) {
+                      showToast({ type: 'warning', message: 'Room code must be at least 4 characters.' });
+                      return;
+                    }
+                    onJoinRoomCode(code);
                   }}
                   disabled={!roomCodeInput.trim()}
                   className="btn-primary"

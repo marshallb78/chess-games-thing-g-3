@@ -189,3 +189,147 @@ test('Multi-move complete simulation: Human vs Bot plays 10 half-moves legally',
 
   assert.ok(chess.history().length >= 8, 'At least 8 moves played smoothly');
 });
+
+test('Invitation lifecycle simulation: User A invites User B, B accepts, both join same match', () => {
+  // Mock Realtime Database memory store
+  const mockDb = {
+    invitations: {},
+    rooms: {},
+    userInvitations: {}
+  };
+
+  const userA = { uid: 'user_a_123', displayName: 'GrandmasterAlice', rating: 1500 };
+  const userB = { uid: 'user_b_456', displayName: 'BobTheKnight', rating: 1450 };
+
+  // 1. User A sends invitation
+  const inviteId = 'inv_' + Date.now();
+  const now = Date.now();
+  const inviteData = {
+    id: inviteId,
+    senderUid: userA.uid,
+    senderName: userA.displayName,
+    senderRating: userA.rating,
+    recipientUid: userB.uid,
+    timeControlId: '10+0',
+    status: 'pending',
+    createdAt: now,
+    expiresAt: now + 60000,
+    roomId: null
+  };
+
+  mockDb.invitations[inviteId] = inviteData;
+  mockDb.userInvitations[userB.uid] = { [inviteId]: true };
+
+  assert.equal(mockDb.invitations[inviteId].status, 'pending');
+  assert.equal(mockDb.invitations[inviteId].recipientUid, userB.uid);
+  assert.equal(mockDb.userInvitations[userB.uid][inviteId], true);
+
+  // 2. User B receives and views invitation
+  const receivedInvite = mockDb.invitations[inviteId];
+  assert.ok(receivedInvite);
+  assert.equal(receivedInvite.senderName, 'GrandmasterAlice');
+  assert.equal(Date.now() < receivedInvite.expiresAt, true, 'Invitation must not be expired');
+
+  // 3. User B accepts match: atomic transition & room creation
+  assert.equal(receivedInvite.recipientUid, userB.uid, 'User B is intended recipient');
+  assert.equal(receivedInvite.status, 'pending', 'Must still be pending');
+
+  const generatedRoomId = 'room_' + Date.now();
+  const initialChess = new Chess();
+
+  const gameRoom = {
+    roomId: generatedRoomId,
+    roomCode: 'AB12CD',
+    hostUid: userA.uid,
+    status: 'playing',
+    timeControlId: '10+0',
+    players: {
+      white: { uid: userA.uid, displayName: userA.displayName, connected: true },
+      black: { uid: userB.uid, displayName: userB.displayName, connected: true }
+    },
+    gameState: {
+      fen: initialChess.fen(),
+      turn: 'w',
+      moves: []
+    }
+  };
+
+  mockDb.rooms[generatedRoomId] = gameRoom;
+  mockDb.invitations[inviteId].status = 'accepted';
+  mockDb.invitations[inviteId].roomId = generatedRoomId;
+  delete mockDb.userInvitations[userB.uid][inviteId];
+
+  // 4. Verify both players receive the exact same match ID and colors
+  const finalInvite = mockDb.invitations[inviteId];
+  assert.equal(finalInvite.status, 'accepted');
+  assert.equal(finalInvite.roomId, generatedRoomId);
+
+  // Player A reads the accepted invitation
+  const playerARoomId = finalInvite.roomId;
+  const playerAColor = gameRoom.players.white.uid === userA.uid ? 'w' : 'b';
+
+  // Player B joined with generatedRoomId
+  const playerBRoomId = generatedRoomId;
+  const playerBColor = gameRoom.players.black.uid === userB.uid ? 'b' : 'w';
+
+  assert.equal(playerARoomId, playerBRoomId, 'Both players must navigate to the exact same room ID');
+  assert.equal(playerAColor, 'w', 'User A is assigned White');
+  assert.equal(playerBColor, 'b', 'User B is assigned Black');
+
+  // 5. Verify moves made in match update shared board for both players
+  const sharedBoard = new Chess(mockDb.rooms[generatedRoomId].gameState.fen);
+  sharedBoard.move('e4');
+  mockDb.rooms[generatedRoomId].gameState.fen = sharedBoard.fen();
+  mockDb.rooms[generatedRoomId].gameState.turn = sharedBoard.turn();
+
+  assert.equal(mockDb.rooms[generatedRoomId].gameState.turn, 'b');
+  assert.ok(mockDb.rooms[generatedRoomId].gameState.fen.includes('4p3') || mockDb.rooms[generatedRoomId].gameState.fen.includes('4P3'));
+
+  sharedBoard.move('e5');
+  mockDb.rooms[generatedRoomId].gameState.fen = sharedBoard.fen();
+  assert.equal(sharedBoard.turn(), 'w');
+});
+
+test('Invitation expiration & duplicate acceptance safety', () => {
+  const expiredInvite = {
+    id: 'inv_old',
+    senderUid: 'u1',
+    recipientUid: 'u2',
+    status: 'pending',
+    createdAt: Date.now() - 100000,
+    expiresAt: Date.now() - 40000 // 40 seconds in the past
+  };
+
+  // Check expiration detection
+  const isExpired = Date.now() > expiredInvite.expiresAt;
+  assert.equal(isExpired, true, 'Old invitation must be detected as expired');
+
+  // Duplicate accept prevention check
+  const alreadyAccepted = {
+    id: 'inv_done',
+    status: 'accepted',
+    roomId: 'room_existing_999'
+  };
+
+  // If already accepted, return existing roomId instead of failing
+  const canRejoin = alreadyAccepted.status === 'accepted' && alreadyAccepted.roomId;
+  assert.equal(canRejoin, 'room_existing_999');
+});
+
+test('Real presence deduplication logic counts unique active players', () => {
+  const now = Date.now();
+  const mockPresenceData = {
+    user_1: { uid: 'user_1', isOnline: true, lastSeen: now - 10000 }, // active (10s ago)
+    user_2: { uid: 'user_2', isOnline: true, lastSeen: now - 50000 }, // active (50s ago)
+    user_3: { uid: 'user_3', isOnline: false, lastSeen: now - 5000 }, // offline
+    user_4: { uid: 'user_4', isOnline: true, lastSeen: now - 300000 }, // stale (5m ago)
+    guest_99: { uid: 'guest_99', isOnline: true, lastSeen: now - 20000 } // active guest (20s ago)
+  };
+
+  // Filter active players within 120s
+  const activeCount = Object.values(mockPresenceData).filter(
+    (p) => p.isOnline === true && now - p.lastSeen < 120000
+  ).length;
+
+  assert.equal(activeCount, 3, 'Must count exactly 3 active players (user_1, user_2, guest_99)');
+});

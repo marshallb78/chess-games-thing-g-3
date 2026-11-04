@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { MatchInvitationData } from '../../lib/onlineService';
 import { TIME_CONTROLS } from '../../types/chess';
 import { Swords, X, Check, Clock, Trophy } from 'lucide-react';
@@ -17,35 +17,80 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
   onClose
 }) => {
   const [isAccepting, setIsAccepting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [secondsRemaining, setSecondsRemaining] = useState(60);
+
+  useEffect(() => {
+    if (!invitation) return;
+
+    setErrorMessage(null);
+    const expiresAt = invitation.expiresAt || invitation.createdAt + 60000;
+    const initialSec = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+    setSecondsRemaining(initialSec);
+
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+      setSecondsRemaining(remaining);
+      if (remaining <= 0) {
+        clearInterval(timer);
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [invitation]);
 
   if (!invitation) return null;
 
   const tcConfig = TIME_CONTROLS[invitation.timeControlId] || TIME_CONTROLS['10+0'];
+  const isExpired = secondsRemaining <= 0;
 
   const handleAccept = async () => {
     setIsAccepting(true);
+    setErrorMessage(null);
     try {
       await onAccept(invitation);
-    } finally {
+    } catch (err: unknown) {
+      setErrorMessage((err as Error).message || 'Failed to accept invitation.');
       setIsAccepting(false);
     }
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 9999 }}>
       <div
         className="modal-content"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: '440px', position: 'relative' }}
+        style={{
+          maxWidth: '440px',
+          position: 'relative',
+          padding: '1.75rem',
+          borderRadius: '16px',
+          background: 'rgba(15, 23, 42, 0.98)',
+          border: '1px solid var(--border-subtle)',
+          boxShadow: '0 24px 50px rgba(0, 0, 0, 0.8), 0 0 24px rgba(56, 189, 248, 0.25)',
+          animation: 'slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}
+        role="dialog"
+        aria-modal="true"
       >
         <button
           onClick={onClose}
-          style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'transparent', color: 'var(--text-muted)' }}
+          style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '1rem',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            padding: '4px'
+          }}
+          aria-label="Close modal"
         >
           <X size={18} />
         </button>
 
-        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
           <div
             style={{
               width: '64px',
@@ -63,10 +108,10 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
             <Swords size={32} />
           </div>
 
-          <h3 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.2rem' }}>
+          <h3 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.2rem' }}>
             Match Challenge
           </h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: 0 }}>
             You have been invited to a live chess match.
           </p>
         </div>
@@ -99,10 +144,12 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
                 justifyContent: 'center'
               }}
             >
-              {invitation.senderName[0].toUpperCase()}
+              {invitation.senderName[0]?.toUpperCase() || 'P'}
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: '1rem' }}>{invitation.senderName}</div>
+              <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                {invitation.senderName}
+              </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Challenger</div>
             </div>
           </div>
@@ -123,7 +170,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
             padding: '0.85rem 1rem',
             borderRadius: '10px',
             border: '1px solid var(--border-subtle)',
-            marginBottom: '1.5rem',
+            marginBottom: '1.25rem',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -138,16 +185,46 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
           </span>
         </div>
 
+        {/* Expiration countdown */}
+        <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+          <span
+            style={{
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              color: isExpired ? '#f43f5e' : 'var(--text-secondary)'
+            }}
+          >
+            {isExpired ? 'This invitation has expired.' : `Expires in ${secondsRemaining}s`}
+          </span>
+        </div>
+
+        {errorMessage && (
+          <div
+            style={{
+              background: 'rgba(244, 63, 94, 0.1)',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+              borderRadius: '8px',
+              padding: '0.65rem 0.85rem',
+              color: '#f87171',
+              fontSize: '0.82rem',
+              marginBottom: '1.25rem',
+              textAlign: 'center'
+            }}
+          >
+            {errorMessage}
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button
             onClick={handleAccept}
-            disabled={isAccepting}
+            disabled={isAccepting || isExpired}
             className="btn-primary"
-            style={{ flex: 1, padding: '0.75rem', fontSize: '0.95rem' }}
+            style={{ flex: 1, padding: '0.75rem', fontSize: '0.95rem', borderRadius: '10px' }}
           >
             <Check size={18} />
-            <span>{isAccepting ? 'Connecting...' : 'Accept Match'}</span>
+            <span>{isAccepting ? 'Connecting...' : isExpired ? 'Expired' : 'Accept Match'}</span>
           </button>
 
           <button
@@ -157,7 +234,7 @@ export const InvitationModal: React.FC<InvitationModalProps> = ({
             }}
             disabled={isAccepting}
             className="btn-secondary"
-            style={{ padding: '0.75rem 1.25rem', fontSize: '0.95rem' }}
+            style={{ padding: '0.75rem 1.25rem', fontSize: '0.95rem', borderRadius: '10px' }}
           >
             Decline
           </button>
