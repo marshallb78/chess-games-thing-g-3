@@ -14,6 +14,12 @@ import { rtdb } from './firebase';
 import type { TimeControlId } from '../types/chess';
 import { TIME_CONTROLS } from '../types/chess';
 import type { GameRoom } from '../types/room';
+import {
+  resolveDisplayName,
+  resolvePlayerRating,
+  normalizeRoomPlayer,
+  sanitizeForFirebase
+} from './playerUtils';
 
 export interface OnlinePresenceUser {
   uid: string;
@@ -79,10 +85,13 @@ export const onlineService = {
     const presenceRef = ref(rtdb, `presence/${user.uid}`);
     const connectedRef = ref(rtdb, '.info/connected');
 
+    const cleanName = resolveDisplayName(user, null, user.displayName);
+    const cleanRating = resolvePlayerRating(user, 1200);
+
     const presenceData: OnlinePresenceUser = {
       uid: user.uid,
-      displayName: user.displayName || 'Anonymous',
-      rating: user.rating || 1200,
+      displayName: cleanName,
+      rating: cleanRating,
       avatar: user.avatar || 'default',
       publicId: user.publicId || user.uid.substring(0, 6).toUpperCase(),
       isOnline: true,
@@ -215,17 +224,20 @@ export const onlineService = {
     const queueKey = newEntryRef.key;
     if (!queueKey) throw new Error('Failed to generate queue key');
 
+    const cleanName = resolveDisplayName(user, null, user.displayName);
+    const cleanRating = resolvePlayerRating(user, 1200);
+
     const entryData = {
       queueKey,
       uid: user.uid,
-      displayName: user.displayName || 'Anonymous',
-      rating: user.rating || 1200,
+      displayName: cleanName,
+      rating: cleanRating,
       timeControlId,
       createdAt: Date.now(),
       isGuest: !!user.isGuest
     };
 
-    await set(newEntryRef, entryData);
+    await set(newEntryRef, sanitizeForFirebase(entryData));
     onDisconnect(newEntryRef).remove();
 
     // Try to pair with an existing waiting player atomically
@@ -250,6 +262,20 @@ export const onlineService = {
             // Randomize White / Black assignment
             const isSelfWhite = Math.random() < 0.5;
 
+            const whitePlayer = normalizeRoomPlayer({
+              uid: isSelfWhite ? user.uid : opponent.uid,
+              displayName: isSelfWhite ? cleanName : opponent.displayName,
+              connected: true,
+              rating: isSelfWhite ? cleanRating : opponent.rating
+            }, 'White Player');
+
+            const blackPlayer = normalizeRoomPlayer({
+              uid: isSelfWhite ? opponent.uid : user.uid,
+              displayName: isSelfWhite ? opponent.displayName : cleanName,
+              connected: true,
+              rating: isSelfWhite ? opponent.rating : cleanRating
+            }, 'Black Player');
+
             const room: GameRoom = {
               roomId,
               roomCode,
@@ -259,18 +285,8 @@ export const onlineService = {
               createdAt: Date.now(),
               lastActivityAt: Date.now(),
               players: {
-                white: {
-                  uid: isSelfWhite ? user.uid : opponent.uid,
-                  displayName: isSelfWhite ? user.displayName : opponent.displayName,
-                  connected: true,
-                  rating: isSelfWhite ? user.rating : opponent.rating
-                },
-                black: {
-                  uid: isSelfWhite ? opponent.uid : user.uid,
-                  displayName: isSelfWhite ? opponent.displayName : user.displayName,
-                  connected: true,
-                  rating: isSelfWhite ? opponent.rating : user.rating
-                }
+                white: whitePlayer,
+                black: blackPlayer
               },
               gameState: {
                 fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -291,7 +307,7 @@ export const onlineService = {
               }
             };
 
-            await set(roomRef, room);
+            await set(roomRef, sanitizeForFirebase(room));
             await set(ref(rtdb, `roomCodes/${roomCode}`), roomId);
 
             // Notify both players by updating their queue entry
@@ -339,7 +355,7 @@ export const onlineService = {
    * Send a real-time match invitation
    */
   async sendInvitation(
-    sender: { uid: string; displayName: string; rating?: number; avatar?: string },
+    sender: { uid: string; displayName: string; rating?: number; avatar?: string; ratings?: any },
     recipientUid: string,
     timeControlId: TimeControlId
   ): Promise<string> {
@@ -353,11 +369,14 @@ export const onlineService = {
     if (!inviteId) throw new Error('Failed to create invitation');
 
     const now = Date.now();
+    const cleanSenderName = resolveDisplayName(sender, null, sender.displayName);
+    const cleanSenderRating = resolvePlayerRating(sender, 1200);
+
     const inviteData: MatchInvitationData = {
       id: inviteId,
       senderUid: sender.uid,
-      senderName: sender.displayName,
-      senderRating: sender.rating || 1200,
+      senderName: cleanSenderName,
+      senderRating: cleanSenderRating,
       senderAvatar: sender.avatar || 'default',
       recipientUid,
       timeControlId,
@@ -366,7 +385,7 @@ export const onlineService = {
       expiresAt: now + 60000 // 60s
     };
 
-    await set(newInviteRef, inviteData);
+    await set(newInviteRef, sanitizeForFirebase(inviteData));
     // Link to recipient inbox
     await set(ref(rtdb, `userInvitations/${recipientUid}/${inviteId}`), true);
 
@@ -441,7 +460,7 @@ export const onlineService = {
    */
   async acceptInvitation(
     invitation: MatchInvitationData,
-    recipient: { uid: string; displayName: string; rating?: number }
+    recipient: { uid: string; displayName?: string | null; rating?: number | null; ratings?: any }
   ): Promise<string> {
     const inviteRef = ref(rtdb, `invitations/${invitation.id}`);
     const snap = await get(inviteRef);
@@ -486,6 +505,20 @@ export const onlineService = {
     const tc = TIME_CONTROLS[invitation.timeControlId] || TIME_CONTROLS['10+0'];
     const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
+    const whitePlayer = normalizeRoomPlayer({
+      uid: current.senderUid,
+      displayName: current.senderName,
+      connected: true,
+      rating: current.senderRating
+    }, 'White Player');
+
+    const blackPlayer = normalizeRoomPlayer({
+      uid: recipient.uid,
+      displayName: resolveDisplayName(recipient, null, recipient.displayName),
+      connected: true,
+      rating: resolvePlayerRating(recipient, 1200)
+    }, 'Black Player');
+
     // Setup GameRoom object
     const room: GameRoom = {
       roomId,
@@ -496,18 +529,8 @@ export const onlineService = {
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       players: {
-        white: {
-          uid: current.senderUid,
-          displayName: current.senderName,
-          connected: true,
-          rating: current.senderRating
-        },
-        black: {
-          uid: recipient.uid,
-          displayName: recipient.displayName,
-          connected: true,
-          rating: recipient.rating
-        }
+        white: whitePlayer,
+        black: blackPlayer
       },
       gameState: {
         fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
@@ -528,8 +551,8 @@ export const onlineService = {
       }
     };
 
-    // Commit room first so both players can read it immediately
-    await set(ref(rtdb, `rooms/${roomId}`), room);
+    // Commit room first so both players can read it immediately without undefined values
+    await set(ref(rtdb, `rooms/${roomId}`), sanitizeForFirebase(room));
     await set(ref(rtdb, `roomCodes/${roomCode}`), roomId);
 
     // Atomically transition invitation to accepted
@@ -581,33 +604,37 @@ export const onlineService = {
    * FRIENDS SYSTEM
    */
   async sendFriendRequest(
-    currentUser: { uid: string; displayName: string },
+    currentUser: { uid: string; displayName?: string | null },
     targetUid: string
   ): Promise<void> {
     if (currentUser.uid === targetUid) throw new Error('Cannot add yourself as a friend');
+    const cleanName = resolveDisplayName(currentUser, null, currentUser.displayName || 'Player');
     const reqRef = ref(rtdb, `friendRequests/${targetUid}/${currentUser.uid}`);
-    await set(reqRef, {
+    await set(reqRef, sanitizeForFirebase({
       fromUid: currentUser.uid,
-      fromName: currentUser.displayName,
+      fromName: cleanName,
       timestamp: Date.now()
-    });
+    }));
   },
 
   async acceptFriendRequest(
-    currentUser: { uid: string; displayName: string },
+    currentUser: { uid: string; displayName?: string | null },
     request: IncomingFriendRequest
   ): Promise<void> {
+    const myCleanName = resolveDisplayName(currentUser, null, currentUser.displayName || 'Player');
+    const reqCleanName = resolveDisplayName({ displayName: request.fromName }, null, 'Player');
+
     // Add to both users' friends lists
-    await set(ref(rtdb, `friends/${currentUser.uid}/${request.fromUid}`), {
+    await set(ref(rtdb, `friends/${currentUser.uid}/${request.fromUid}`), sanitizeForFirebase({
       uid: request.fromUid,
-      displayName: request.fromName,
+      displayName: reqCleanName,
       since: Date.now()
-    });
-    await set(ref(rtdb, `friends/${request.fromUid}/${currentUser.uid}`), {
+    }));
+    await set(ref(rtdb, `friends/${request.fromUid}/${currentUser.uid}`), sanitizeForFirebase({
       uid: currentUser.uid,
-      displayName: currentUser.displayName,
+      displayName: myCleanName,
       since: Date.now()
-    });
+    }));
     // Remove pending request
     await remove(ref(rtdb, `friendRequests/${currentUser.uid}/${request.fromUid}`));
   },

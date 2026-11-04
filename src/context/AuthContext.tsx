@@ -11,6 +11,7 @@ import {
 import { ref, get, set, update } from 'firebase/database';
 import { auth, rtdb } from '../lib/firebase';
 import type { UserProfile } from '../types/user';
+import { resolveDisplayName } from '../lib/playerUtils';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -89,7 +90,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // New profile creation
-    const name = chosenDisplayName || user.displayName || user.email?.split('@')[0] || 'Player';
+    const emailName = user.email ? user.email.split('@')[0] : 'Player';
+    const name = resolveDisplayName({ displayName: chosenDisplayName }, user, emailName);
     const publicId = 'P' + Math.floor(100000 + Math.random() * 900000).toString();
 
     const newProfile: UserProfile = {
@@ -147,9 +149,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUserProfile(profile);
         } catch (err) {
           console.warn('Profile fetch fallback:', err);
+          const fallbackName = resolveDisplayName(null, user, user.email?.split('@')[0] || 'Player');
           setUserProfile({
             uid: user.uid,
-            displayName: user.displayName || user.email?.split('@')[0] || 'Player',
+            displayName: fallbackName,
             publicId: 'P' + user.uid.substring(0, 6).toUpperCase(),
             avatar: 'default',
             createdAt: Date.now(),
@@ -180,6 +183,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signIn = async (email: string, pass: string) => {
     const credential = await signInWithEmailAndPassword(auth, email.trim(), pass);
     const profile = await fetchOrCreateProfile(credential.user);
+    if (profile?.displayName && !credential.user.displayName) {
+      try {
+        await updateProfile(credential.user, { displayName: profile.displayName });
+      } catch (e) {
+        console.warn('Could not sync displayName to firebase auth user:', e);
+      }
+    }
     setUserProfile(profile);
     setIsGuest(false);
   };

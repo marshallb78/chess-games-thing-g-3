@@ -15,6 +15,12 @@ import type { TimeControlId, GameEndReason } from '../types/chess';
 import { TIME_CONTROLS } from '../types/chess';
 import type { UserProfile } from '../types/user';
 import type { Color } from 'chess.js';
+import {
+  resolveDisplayName,
+  resolvePlayerRating,
+  normalizeRoomPlayer,
+  sanitizeForFirebase
+} from './playerUtils';
 
 // Random alphanumeric room code generator (excludes confusing chars 0/O, 1/I)
 function generateRoomCode(): string {
@@ -42,6 +48,13 @@ export const roomService = {
 
     if (!roomId) throw new Error('Failed to generate room ID');
 
+    const whitePlayer = normalizeRoomPlayer({
+      uid: user.uid,
+      displayName: resolveDisplayName(user, null, user.displayName),
+      connected: true,
+      rating: resolvePlayerRating(user, 1200)
+    }, 'White Player');
+
     const initialRoom: GameRoom = {
       roomId,
       roomCode,
@@ -51,12 +64,7 @@ export const roomService = {
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       players: {
-        white: {
-          uid: user.uid,
-          displayName: user.displayName,
-          connected: true,
-          rating: user.ratings.rapid.rating
-        },
+        white: whitePlayer,
         black: null
       },
       gameState: {
@@ -79,7 +87,7 @@ export const roomService = {
     };
 
     // Save room and code lookup
-    await set(newRoomRef, initialRoom);
+    await set(newRoomRef, sanitizeForFirebase(initialRoom));
     await set(ref(rtdb, `roomCodes/${roomCode}`), roomId);
 
     // Setup disconnect presence for host
@@ -131,16 +139,16 @@ export const roomService = {
 
       // Case 3: Joining as new opponent (Black)
       if (!currentRoom.players.black) {
-        currentRoom.players.black = {
+        currentRoom.players.black = normalizeRoomPlayer({
           uid: user.uid,
-          displayName: user.displayName,
+          displayName: resolveDisplayName(user, null, user.displayName),
           connected: true,
-          rating: user.ratings.rapid.rating
-        };
+          rating: resolvePlayerRating(user, 1200)
+        }, 'Black Player');
         currentRoom.status = 'playing';
         currentRoom.lastActivityAt = Date.now();
         joinState.color = 'b';
-        return currentRoom;
+        return sanitizeForFirebase(currentRoom);
       }
 
       // Case 4: Room is already full
@@ -306,14 +314,15 @@ export const roomService = {
 
     const chatRef = ref(rtdb, `chat/${roomId}`);
     const newMsgRef = push(chatRef);
+    const senderName = resolveDisplayName(user, null, user.displayName || 'Player');
     const msg: ChatMessage = {
       id: newMsgRef.key || Math.random().toString(),
       senderUid: user.uid,
-      senderName: user.displayName,
+      senderName,
       text: cleanText,
       timestamp: Date.now()
     };
-    await set(newMsgRef, msg);
+    await set(newMsgRef, sanitizeForFirebase(msg));
   },
 
   /**

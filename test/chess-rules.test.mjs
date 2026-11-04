@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Chess } from 'chess.js';
 import { getCapturedPieces, findKingSquare } from '../src/lib/chessUtils.ts';
+import {
+  resolveDisplayName,
+  resolvePlayerRating,
+  normalizeRoomPlayer,
+  sanitizeForFirebase
+} from '../src/lib/playerUtils.ts';
 
 test('Chess engine initializes correctly with 32 pieces and standard FEN', () => {
   const chess = new Chess();
@@ -332,4 +338,200 @@ test('Real presence deduplication logic counts unique active players', () => {
   ).length;
 
   assert.equal(activeCount, 3, 'Must count exactly 3 active players (user_1, user_2, guest_99)');
+});
+
+test('Display name resolution follows 4-tier priority', () => {
+  // Tier 1: Saved profile name takes top priority
+  assert.equal(
+    resolveDisplayName({ displayName: 'GrandmasterCarlsen' }, { displayName: 'Magnus' }, 'Guest 1234'),
+    'GrandmasterCarlsen'
+  );
+
+  // Tier 2: Authenticated user name when profile name is missing or empty
+  assert.equal(
+    resolveDisplayName(null, { displayName: 'Magnus' }, 'Guest 1234'),
+    'Magnus'
+  );
+  assert.equal(
+    resolveDisplayName({ displayName: '   ' }, { displayName: 'Magnus' }, 'Guest 1234'),
+    'Magnus'
+  );
+
+  // When profile name is placeholder 'Player' or 'Anonymous', prefers authenticated user's name
+  assert.equal(
+    resolveDisplayName({ displayName: 'Player' }, { displayName: 'Kasparov' }),
+    'Kasparov'
+  );
+
+  // Tier 3: Explicitly assigned guest display name
+  assert.equal(
+    resolveDisplayName(null, null, 'Guest 7788'),
+    'Guest 7788'
+  );
+
+  // Tier 4: Final fallback to 'Anonymous'
+  assert.equal(
+    resolveDisplayName(null, null, null),
+    'Anonymous'
+  );
+  assert.equal(
+    resolveDisplayName({ displayName: '' }, { displayName: '' }, ''),
+    'Anonymous'
+  );
+});
+
+test('Player rating resolution extracts valid number and falls back to 1200', () => {
+  // 1. Direct rating property
+  assert.equal(resolvePlayerRating({ rating: 1540 }), 1540);
+
+  // 2. Nested ratings object (standard UserProfile)
+  assert.equal(
+    resolvePlayerRating({ ratings: { rapid: { rating: 1620 } } }),
+    1620
+  );
+  assert.equal(
+    resolvePlayerRating({ ratings: { casual: { rating: 1350 } } }),
+    1350
+  );
+  assert.equal(
+    resolvePlayerRating({ ratings: { blitz: { rating: 1780 } } }),
+    1780
+  );
+
+  // 3. Fallbacks: missing rating, undefined, null, NaN
+  assert.equal(resolvePlayerRating(null), 1200);
+  assert.equal(resolvePlayerRating({}), 1200);
+  assert.equal(resolvePlayerRating({ rating: undefined }), 1200);
+  assert.equal(resolvePlayerRating({ rating: null }), 1200);
+  assert.equal(resolvePlayerRating({ rating: NaN }), 1200);
+  assert.equal(resolvePlayerRating({ ratings: { rapid: { rating: null } } }), 1200);
+
+  // Custom fallback
+  assert.equal(resolvePlayerRating(null, 1500), 1500);
+});
+
+test('Room player normalization guarantees valid fields without undefined', () => {
+  // Guest with no ratings
+  const guestNorm = normalizeRoomPlayer({
+    uid: 'guest_abc123',
+    displayName: 'Guest 9900',
+    connected: true
+  });
+  assert.equal(guestNorm.uid, 'guest_abc123');
+  assert.equal(guestNorm.displayName, 'Guest 9900');
+  assert.equal(guestNorm.connected, true);
+  assert.equal(guestNorm.rating, 1200);
+  assert.equal(guestNorm.rating !== undefined, true);
+
+  // User with nested UserProfile ratings
+  const userNorm = normalizeRoomPlayer({
+    uid: 'user_xyz789',
+    displayName: 'CheckmateKing',
+    ratings: {
+      rapid: { rating: 1450, provisional: false, gamesPlayed: 10 },
+      casual: { rating: 1200, provisional: true, gamesPlayed: 0 },
+      blitz: { rating: 1200, provisional: true, gamesPlayed: 0 },
+      bullet: { rating: 1200, provisional: true, gamesPlayed: 0 }
+    }
+  });
+  assert.equal(userNorm.uid, 'user_xyz789');
+  assert.equal(userNorm.displayName, 'CheckmateKing');
+  assert.equal(userNorm.connected, true);
+  assert.equal(userNorm.rating, 1450);
+});
+
+test('sanitizeForFirebase strips all undefined values recursively', () => {
+  const dirtyData = {
+    roomId: 'room_123',
+    status: 'playing',
+    players: {
+      white: {
+        uid: 'u1',
+        displayName: 'Player White',
+        rating: 1300,
+        emptyProp: undefined
+      },
+      black: {
+        uid: 'u2',
+        displayName: 'Player Black',
+        rating: undefined // BUG 1 reproduction!
+      }
+    },
+    optionalMeta: undefined,
+    history: [
+      { move: 'e4', comment: undefined },
+      { move: 'e5', score: null }
+    ]
+  };
+
+  const cleanData = sanitizeForFirebase(dirtyData);
+
+  // Check that undefined was stripped
+  assert.equal('emptyProp' in cleanData.players.white, false);
+  assert.equal('rating' in cleanData.players.black, false);
+  assert.equal('optionalMeta' in cleanData, false);
+  assert.equal('comment' in cleanData.history[0], false);
+
+  // Check that valid null and values are preserved
+  assert.equal(cleanData.roomId, 'room_123');
+  assert.equal(cleanData.players.white.rating, 1300);
+  assert.equal(cleanData.history[1].score, null);
+});
+
+test('Bug 1 & 2 integration: Invite acceptance payload never contains undefined rating', () => {
+  // Simulating an invitation record
+  const invitation = {
+    id: 'inv_abc',
+    senderUid: 'sender_111',
+    senderName: 'WhiteGrandmaster',
+    senderRating: 1550,
+    timeControlId: '10+0'
+  };
+
+  // Simulating a recipient UserProfile which has `ratings` (no top-level `rating`)
+  const recipientProfile = {
+    uid: 'recipient_222',
+    displayName: 'BlackStrategist',
+    ratings: {
+      rapid: { rating: 1425, gamesPlayed: 12, provisional: false },
+      blitz: { rating: 1200, gamesPlayed: 0, provisional: true },
+      casual: { rating: 1200, gamesPlayed: 0, provisional: true },
+      bullet: { rating: 1200, gamesPlayed: 0, provisional: true }
+    }
+  };
+
+  // Construct normalized players as done in acceptInvitation()
+  const whitePlayer = normalizeRoomPlayer({
+    uid: invitation.senderUid,
+    displayName: invitation.senderName,
+    connected: true,
+    rating: invitation.senderRating
+  }, 'White Player');
+
+  const blackPlayer = normalizeRoomPlayer({
+    uid: recipientProfile.uid,
+    displayName: resolveDisplayName(recipientProfile, null, recipientProfile.displayName),
+    connected: true,
+    rating: resolvePlayerRating(recipientProfile, 1200)
+  }, 'Black Player');
+
+  const roomPayload = {
+    roomId: 'room_new_456',
+    players: {
+      white: whitePlayer,
+      black: blackPlayer
+    }
+  };
+
+  const sanitized = sanitizeForFirebase(roomPayload);
+
+  // Assertions for Bug 1
+  assert.equal(sanitized.players.black.rating, 1425);
+  assert.equal(typeof sanitized.players.black.rating, 'number');
+  assert.notEqual(sanitized.players.black.rating, undefined);
+  assert.equal(Number.isNaN(sanitized.players.black.rating), false);
+
+  // Assertions for Bug 2
+  assert.equal(sanitized.players.black.displayName, 'BlackStrategist');
+  assert.equal(sanitized.players.white.displayName, 'WhiteGrandmaster');
 });

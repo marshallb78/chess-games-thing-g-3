@@ -18,6 +18,7 @@ import { InvitationModal } from './components/Invitations/InvitationModal';
 import { OutgoingChallengeModal } from './components/Invitations/OutgoingChallengeModal';
 import { roomService } from './lib/roomService';
 import { onlineService, type MatchInvitationData, type IncomingFriendRequest } from './lib/onlineService';
+import { resolveDisplayName, resolvePlayerRating } from './lib/playerUtils';
 import type { TimeControlId, BotDifficulty } from './types/chess';
 
 type AppScreen =
@@ -94,15 +95,6 @@ function MainApp() {
     return () => unsub();
   }, [currentUser, isGuest]);
 
-  // 4. URL query params for direct room link (e.g. ?room=AB12CD)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomCode = params.get('room');
-    if (roomCode && userProfile) {
-      handleJoinByRoomCode(roomCode);
-    }
-  }, [userProfile]);
-
   // Game start handlers
   const handleStartBotGame = (tc: TimeControlId, difficulty: BotDifficulty, playerColor: 'w' | 'b') => {
     setActiveTimeControl(tc);
@@ -144,6 +136,15 @@ function MainApp() {
     }
   };
 
+  // 4. URL query params for direct room link (e.g. ?room=AB12CD)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const roomCode = params.get('room');
+    if (roomCode && userProfile) {
+      handleJoinByRoomCode(roomCode);
+    }
+  }, [userProfile]);
+
   // Outgoing Challenge Handler
   const handleStartOutgoingChallenge = async (
     targetPlayer: { uid: string; displayName: string; rating?: number },
@@ -151,12 +152,16 @@ function MainApp() {
   ) => {
     if (!userProfile) return;
     try {
+      const myDisplayName = resolveDisplayName(userProfile, currentUser);
+      const myRating = resolvePlayerRating(userProfile, 1200);
+
       const inviteId = await onlineService.sendInvitation(
         {
           uid: userProfile.uid,
-          displayName: userProfile.displayName,
-          rating: userProfile.ratings?.rapid?.rating || 1200,
-          avatar: userProfile.avatar
+          displayName: myDisplayName,
+          rating: myRating,
+          avatar: userProfile.avatar,
+          ratings: userProfile.ratings
         },
         targetPlayer.uid,
         timeControl
@@ -184,12 +189,16 @@ function MainApp() {
   const handleReinviteOutgoingChallenge = async () => {
     if (!outgoingChallenge || !userProfile) return;
     try {
+      const myDisplayName = resolveDisplayName(userProfile, currentUser);
+      const myRating = resolvePlayerRating(userProfile, 1200);
+
       const inviteId = await onlineService.sendInvitation(
         {
           uid: userProfile.uid,
-          displayName: userProfile.displayName,
-          rating: userProfile.ratings?.rapid?.rating || 1200,
-          avatar: userProfile.avatar
+          displayName: myDisplayName,
+          rating: myRating,
+          avatar: userProfile.avatar,
+          ratings: userProfile.ratings
         },
         outgoingChallenge.targetPlayerUid,
         outgoingChallenge.timeControlId
@@ -205,7 +214,13 @@ function MainApp() {
   const handleAcceptInvitation = async (invitation: MatchInvitationData) => {
     if (!userProfile) return;
     try {
-      const roomId = await onlineService.acceptInvitation(invitation, userProfile);
+      const recipientData = {
+        uid: userProfile.uid,
+        displayName: resolveDisplayName(userProfile, currentUser),
+        rating: resolvePlayerRating(userProfile, 1200),
+        ratings: userProfile.ratings
+      };
+      const roomId = await onlineService.acceptInvitation(invitation, recipientData);
       setViewingInvite(null);
       setIncomingInvite(null);
       setActiveRoomId(roomId);
@@ -240,10 +255,13 @@ function MainApp() {
       {/* Top Navbar */}
       <Navbar
         currentUser={
-          currentUser
-            ? { uid: currentUser.uid, displayName: currentUser.displayName, email: currentUser.email, isGuest: false }
-            : userProfile
-            ? { uid: userProfile.uid, displayName: userProfile.displayName, isGuest: true }
+          userProfile || currentUser
+            ? {
+                uid: userProfile?.uid || currentUser!.uid,
+                displayName: resolveDisplayName(userProfile, currentUser),
+                email: currentUser?.email,
+                isGuest: !currentUser || !!userProfile?.isGuest
+              }
             : null
         }
         friendRequestsCount={friendRequests.length}
@@ -276,10 +294,11 @@ function MainApp() {
               setAuthModalOpen(true);
             }}
             currentUser={
-              currentUser
-                ? { uid: currentUser.uid, displayName: currentUser.displayName }
-                : userProfile
-                ? { uid: userProfile.uid, displayName: userProfile.displayName }
+              userProfile || currentUser
+                ? {
+                    uid: userProfile?.uid || currentUser!.uid,
+                    displayName: resolveDisplayName(userProfile, currentUser)
+                  }
                 : null
             }
             onOpenProfile={() => setProfileModalOpen(true)}
@@ -337,8 +356,8 @@ function MainApp() {
               isBotGame={true}
               botDifficulty={botDifficulty}
               playerColor={botPlayerColor}
-              whiteName={botPlayerColor === 'w' ? userProfile?.displayName || 'You' : `Bot (${botDifficulty})`}
-              blackName={botPlayerColor === 'b' ? userProfile?.displayName || 'You' : `Bot (${botDifficulty})`}
+              whiteName={botPlayerColor === 'w' ? resolveDisplayName(userProfile, currentUser, 'You') : `Bot (${botDifficulty})`}
+              blackName={botPlayerColor === 'b' ? resolveDisplayName(userProfile, currentUser, 'You') : `Bot (${botDifficulty})`}
               onReturnToLobby={() => setCurrentScreen('home')}
             />
           </div>
@@ -391,10 +410,12 @@ function MainApp() {
         isOpen={friendsModalOpen}
         onClose={() => setFriendsModalOpen(false)}
         currentUser={
-          currentUser
-            ? { uid: currentUser.uid, displayName: currentUser.displayName || 'Player', isGuest: false }
-            : userProfile
-            ? { uid: userProfile.uid, displayName: userProfile.displayName, isGuest: true }
+          userProfile || currentUser
+            ? {
+                uid: userProfile?.uid || currentUser!.uid,
+                displayName: resolveDisplayName(userProfile, currentUser),
+                isGuest: !currentUser || !!userProfile?.isGuest
+              }
             : null
         }
         onInviteFriend={(friendUid, friendName) => {

@@ -12,6 +12,7 @@ import { MoveHistory } from './MoveHistory';
 import { RoomChat } from './RoomChat';
 import { GameOverModal } from './GameOverModal';
 import { getCapturedPieces } from '../../lib/chessUtils';
+import { resolveDisplayName, resolvePlayerRating } from '../../lib/playerUtils';
 import {
   Copy,
   Check,
@@ -417,6 +418,12 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
   const opponent = playerColor === 'w' ? blackPlayer : whitePlayer;
   const opponentConnected = opponent ? opponent.connected : false;
 
+  const whiteName = resolveDisplayName({ displayName: whitePlayer?.displayName }, null, 'White Player');
+  const blackName = resolveDisplayName({ displayName: blackPlayer?.displayName }, null, 'Black Player');
+  const whiteRating = resolvePlayerRating(whitePlayer, 1200);
+  const blackRating = resolvePlayerRating(blackPlayer, 1200);
+  const opponentName = playerColor === 'w' ? blackName : whiteName;
+
   const capturedInfo = getCapturedPieces(chess);
   const isWhiteTurn = chess.turn() === 'w';
   const isMyTurn = !room.gameState.isGameOver && chess.turn() === playerColor;
@@ -502,9 +509,9 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
               <ChessClock
                 timeRemainingSeconds={blackTime}
                 isActive={!room.gameState.isGameOver && !isWhiteTurn}
-                playerName={blackPlayer?.displayName || 'Black Player'}
+                playerName={blackName}
                 isWhite={false}
-                rating={blackPlayer?.rating}
+                rating={blackRating}
                 isUntimed={isUntimed}
               />
               <div style={{ marginTop: '4px', padding: '0 4px' }}>
@@ -520,9 +527,9 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
               <ChessClock
                 timeRemainingSeconds={whiteTime}
                 isActive={!room.gameState.isGameOver && isWhiteTurn}
-                playerName={whitePlayer?.displayName || 'White Player'}
+                playerName={whiteName}
                 isWhite={true}
-                rating={whitePlayer?.rating}
+                rating={whiteRating}
                 isUntimed={isUntimed}
               />
               <div style={{ marginTop: '4px', padding: '0 4px' }}>
@@ -556,9 +563,9 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
               <ChessClock
                 timeRemainingSeconds={whiteTime}
                 isActive={!room.gameState.isGameOver && isWhiteTurn}
-                playerName={whitePlayer?.displayName || 'White Player'}
+                playerName={whiteName}
                 isWhite={true}
-                rating={whitePlayer?.rating}
+                rating={whiteRating}
                 isUntimed={isUntimed}
               />
             </div>
@@ -574,9 +581,9 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
               <ChessClock
                 timeRemainingSeconds={blackTime}
                 isActive={!room.gameState.isGameOver && !isWhiteTurn}
-                playerName={blackPlayer?.displayName || 'Black Player'}
+                playerName={blackName}
                 isWhite={false}
-                rating={blackPlayer?.rating}
+                rating={blackRating}
                 isUntimed={isUntimed}
               />
             </div>
@@ -614,7 +621,7 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
                   ? 'Game Over'
                   : isMyTurn
                   ? 'Your Turn to Move!'
-                  : `Waiting for ${isWhiteTurn ? whitePlayer?.displayName : blackPlayer?.displayName}...`}
+                  : `Waiting for ${isWhiteTurn ? whiteName : blackName}...`}
               </span>
             </div>
 
@@ -688,7 +695,7 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
               <RoomChat
                 roomId={roomId}
                 userProfile={userProfile}
-                opponentName={opponent?.displayName}
+                opponentName={opponentName}
                 opponentConnected={opponentConnected}
               />
             )}
@@ -753,8 +760,8 @@ export const OnlineRoomView: React.FC<OnlineRoomViewProps> = ({
         <GameOverModal
           winner={room.gameState.winner}
           reason={room.gameState.endReason}
-          whitePlayerName={whitePlayer?.displayName || 'White'}
-          blackPlayerName={blackPlayer?.displayName || 'Black'}
+          whitePlayerName={whiteName}
+          blackPlayerName={blackName}
           onRematch={handleRequestRematch}
           onLobby={onLeaveRoom}
           onClose={() => setShowEndModal(false)}
