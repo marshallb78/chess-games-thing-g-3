@@ -6,7 +6,9 @@ import {
   resolveDisplayName,
   resolvePlayerRating,
   normalizeRoomPlayer,
-  sanitizeForFirebase
+  sanitizeForFirebase,
+  hashEmail,
+  isEmailRegisteredInProfiles
 } from '../src/lib/playerUtils.ts';
 
 test('Chess engine initializes correctly with 32 pieces and standard FEN', () => {
@@ -534,4 +536,69 @@ test('Bug 1 & 2 integration: Invite acceptance payload never contains undefined 
   // Assertions for Bug 2
   assert.equal(sanitized.players.black.displayName, 'BlackStrategist');
   assert.equal(sanitized.players.white.displayName, 'WhiteGrandmaster');
+});
+
+test('hashEmail produces deterministic SHA-256 for case-insensitive email matching', async () => {
+  const hash1 = await hashEmail('Player@Example.Com');
+  const hash2 = await hashEmail('   player@example.com  ');
+  assert.equal(hash1.length, 64);
+  assert.equal(hash1, hash2, 'Normalized emails must produce identical hashes');
+
+  const emptyHash = await hashEmail('');
+  assert.equal(emptyHash, '');
+});
+
+test('isEmailRegisteredInProfiles detects existing vs non-existent accounts', async () => {
+  const testEmail = 'kasparov@worldchess.com';
+  const testHash = await hashEmail(testEmail);
+
+  const mockProfiles = {
+    user_1: {
+      uid: 'user_1',
+      displayName: 'GarryK',
+      emailHash: testHash,
+      publicId: 'P100001',
+      avatar: 'default',
+      createdAt: Date.now(),
+      lastActive: Date.now(),
+      stats: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0 },
+      ratings: {
+        bullet: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        blitz: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        rapid: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        casual: { rating: 1200, provisional: true, gamesPlayed: 0 }
+      }
+    },
+    user_2: {
+      uid: 'user_2',
+      displayName: 'marshall.britton', // legacy account without emailHash
+      publicId: 'P100002',
+      avatar: 'default',
+      createdAt: Date.now(),
+      lastActive: Date.now(),
+      stats: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0 },
+      ratings: {
+        bullet: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        blitz: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        rapid: { rating: 1200, provisional: true, gamesPlayed: 0 },
+        casual: { rating: 1200, provisional: true, gamesPlayed: 0 }
+      }
+    }
+  };
+
+  // 1. Direct hash match
+  const match1 = await isEmailRegisteredInProfiles(testEmail, mockProfiles);
+  assert.equal(match1, true);
+
+  // 2. Legacy account match
+  const match2 = await isEmailRegisteredInProfiles('marshallbritton78@gmail.com', mockProfiles);
+  assert.equal(match2, true);
+
+  // 3. Non-existent account detection (should return false)
+  const nonExistent = await isEmailRegisteredInProfiles('unknown_new_player_99@yahoo.com', mockProfiles);
+  assert.equal(nonExistent, false, 'Non-existent email must be detected as not registered');
+
+  // 4. Invalid input handling
+  assert.equal(await isEmailRegisteredInProfiles('', mockProfiles), false);
+  assert.equal(await isEmailRegisteredInProfiles('not-an-email', mockProfiles), false);
 });

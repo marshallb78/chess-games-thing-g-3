@@ -20,6 +20,7 @@ export interface UserProfile {
   lastActive: number;
   about?: string;
   isGuest?: boolean;
+  emailHash?: string;
   stats: UserStats;
   ratings: {
     bullet: RatingInfo;

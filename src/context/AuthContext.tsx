@@ -11,7 +11,12 @@ import {
 import { ref, get, set, update } from 'firebase/database';
 import { auth, rtdb } from '../lib/firebase';
 import type { UserProfile } from '../types/user';
-import { resolveDisplayName } from '../lib/playerUtils';
+import {
+  resolveDisplayName,
+  hashEmail,
+  isEmailRegisteredInProfiles,
+  sanitizeForFirebase
+} from '../lib/playerUtils';
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -21,6 +26,7 @@ interface AuthContextType {
   signIn: (email: string, pass: string) => Promise<void>;
   createAccount: (displayName: string, email: string, pass: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  checkEmailExists: (email: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   playAsGuest: () => UserProfile;
@@ -81,12 +87,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchOrCreateProfile = async (user: FirebaseUser, chosenDisplayName?: string): Promise<UserProfile> => {
     const profileRef = ref(rtdb, `profiles/${user.uid}`);
     const snapshot = await get(profileRef);
+    const emailHash = user.email ? await hashEmail(user.email) : undefined;
 
     if (snapshot.exists()) {
       const existing = snapshot.val() as UserProfile;
-      // Update lastActive timestamp only
-      await update(profileRef, { lastActive: Date.now() });
-      return { ...existing, lastActive: Date.now() };
+      const updates: Partial<UserProfile> = { lastActive: Date.now() };
+      if (!existing.emailHash && emailHash) {
+        updates.emailHash = emailHash;
+      }
+      await update(profileRef, sanitizeForFirebase(updates));
+      return { ...existing, ...updates };
     }
 
     // New profile creation
@@ -102,6 +112,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: Date.now(),
       lastActive: Date.now(),
       isGuest: false,
+      emailHash,
       about: 'Chess player on G+3.',
       stats: {
         gamesPlayed: 0,
@@ -117,8 +128,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    await set(profileRef, newProfile);
+    await set(profileRef, sanitizeForFirebase(newProfile));
     return newProfile;
+  };
+
+  const checkEmailExists = async (email: string): Promise<boolean> => {
+    const clean = email.toLowerCase().trim();
+    if (!clean || !clean.includes('@') || !clean.includes('.')) return false;
+
+    try {
+      const profilesRef = ref(rtdb, 'profiles');
+      const snap = await get(profilesRef);
+      if (!snap.exists()) return false;
+      const profiles = snap.val() as Record<string, UserProfile>;
+      return await isEmailRegisteredInProfiles(clean, profiles);
+    } catch (e) {
+      console.warn('Error checking email in profiles:', e);
+      return false;
+    }
   };
 
   const playAsGuest = (): UserProfile => {
@@ -181,17 +208,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const signIn = async (email: string, pass: string) => {
-    const credential = await signInWithEmailAndPassword(auth, email.trim(), pass);
-    const profile = await fetchOrCreateProfile(credential.user);
-    if (profile?.displayName && !credential.user.displayName) {
-      try {
-        await updateProfile(credential.user, { displayName: profile.displayName });
-      } catch (e) {
-        console.warn('Could not sync displayName to firebase auth user:', e);
+    const trimmedEmail = email.trim();
+    try {
+      const credential = await signInWithEmailAndPassword(auth, trimmedEmail, pass);
+      const profile = await fetchOrCreateProfile(credential.user);
+      if (profile?.displayName && !credential.user.displayName) {
+        try {
+          await updateProfile(credential.user, { displayName: profile.displayName });
+        } catch (e) {
+          console.warn('Could not sync displayName to firebase auth user:', e);
+        }
       }
+      setUserProfile(profile);
+      setIsGuest(false);
+    } catch (err: unknown) {
+      const fbErr = err as { code?: string; message?: string };
+      // Distinguish non-existent account from incorrect password
+      if (fbErr.code === 'auth/invalid-credential' || fbErr.code === 'auth/user-not-found') {
+        const exists = await checkEmailExists(trimmedEmail);
+        if (!exists) {
+          const notFoundError = new Error('No account was found with this email. Please create an account.');
+          (notFoundError as unknown as { code: string }).code = 'auth/user-not-found';
+          throw notFoundError;
+        }
+      }
+      throw err;
     }
-    setUserProfile(profile);
-    setIsGuest(false);
   };
 
   const createAccount = async (displayName: string, email: string, pass: string) => {
@@ -225,6 +267,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signIn,
         createAccount,
         resetPassword,
+        checkEmailExists,
         signOut,
         refreshProfile,
         playAsGuest

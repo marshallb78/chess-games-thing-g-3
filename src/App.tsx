@@ -32,7 +32,7 @@ type AppScreen =
   | 'online_game';
 
 function MainApp() {
-  const { currentUser, userProfile, isGuest, signOut, refreshProfile, playAsGuest } = useAuth();
+  const { currentUser, userProfile, loading, isGuest, signOut, refreshProfile, playAsGuest } = useAuth();
   const { showToast } = useToast();
 
   const [currentScreen, setCurrentScreen] = useState<AppScreen>('home');
@@ -53,6 +53,14 @@ function MainApp() {
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'signup'>('signin');
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [friendsModalOpen, setFriendsModalOpen] = useState(false);
+
+  // Ask user to sign in or make an account every time the site is opened or reloaded
+  useEffect(() => {
+    if (!loading && !currentUser) {
+      setAuthInitialMode('signin');
+      setAuthModalOpen(true);
+    }
+  }, [loading, currentUser]);
 
   // Incoming invitations
   const [incomingInvite, setIncomingInvite] = useState<MatchInvitationData | null>(null);

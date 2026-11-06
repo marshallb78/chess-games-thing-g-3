@@ -141,3 +141,57 @@ export function sanitizeForFirebase<T>(data: T): T {
 
   return data;
 }
+
+/**
+ * One-way cryptographic SHA-256 hash of a normalized email address.
+ * Used for privacy-safe client-side account existence verification.
+ */
+export async function hashEmail(email: string): Promise<string> {
+  const clean = email.toLowerCase().trim();
+  if (!clean) return '';
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(clean));
+    return Array.from(new Uint8Array(buffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  // Fallback for runtimes without Web Crypto
+  let hash = 0;
+  for (let i = 0; i < clean.length; i++) {
+    hash = (hash << 5) - hash + clean.charCodeAt(i);
+    hash |= 0;
+  }
+  return 'fb_' + Math.abs(hash).toString(16);
+}
+
+/**
+ * Checks whether an email address is associated with an existing registered player.
+ */
+export async function isEmailRegisteredInProfiles(
+  email: string,
+  profiles: Record<string, UserProfile>
+): Promise<boolean> {
+  const clean = email.toLowerCase().trim();
+  if (!clean || !clean.includes('@')) return false;
+
+  const targetHash = await hashEmail(clean);
+  const emailPrefix = clean.split('@')[0].replace(/[^a-z0-9]/g, '');
+
+  for (const p of Object.values(profiles)) {
+    if (!p) continue;
+    // Check 1: Direct emailHash match
+    if (p.emailHash && p.emailHash === targetHash) {
+      return true;
+    }
+    // Check 2: Match against initial legacy account displayNames
+    if (p.displayName) {
+      const normDisplay = p.displayName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (emailPrefix && (normDisplay.includes(emailPrefix) || emailPrefix.includes(normDisplay))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
